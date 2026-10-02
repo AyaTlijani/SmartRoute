@@ -5,15 +5,17 @@ Pipeline:
 
     Address input
         ↓
-    OpenRouteService
-        ↓
-    Travel-time matrix
+    Geocoding + travel-time matrix
         ↓
     OR-Tools VRPTW
         ↓
     Optimized delivery sequence
         ↓
-    Google Maps visualization
+    Directions API using optimized coordinates
+        ↓
+    Actual road geometry
+        ↓
+    React + Leaflet visualization
 """
 
 import logging
@@ -28,7 +30,10 @@ from models import (
     OptimizeRouteResponse,
     OptimizedStop,
 )
-from distance import fetch_distance_matrix
+from distance import (
+    fetch_route_data,
+    fetch_route_geometry,
+)
 from vrptw_solver import solve_vrptw
 
 
@@ -69,7 +74,6 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        # Add your deployed SmartRoute frontend URL here later.
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -97,7 +101,10 @@ _DEPOT_WINDOW = (0, 540)
 # HEALTH CHECK
 # ============================================================================
 
-@app.get("/health", tags=["Meta"])
+@app.get(
+    "/health",
+    tags=["Meta"],
+)
 def health_check() -> dict:
     return {
         "status": "ok",
@@ -115,8 +122,8 @@ def health_check() -> dict:
     tags=["Route Optimization"],
     summary="Optimize a set of delivery stops",
     response_description=(
-        "OR-Tools optimized delivery sequence with ETA "
-        "and Google Maps route"
+        "OR-Tools optimized delivery sequence with "
+        "coordinates, ETA, road geometry, and Google Maps route"
     ),
 )
 def optimize_route(
@@ -152,6 +159,9 @@ def optimize_route(
     # 2. BUILD ADDRESS LIST
     # ------------------------------------------------------------------------
 
+    # Index 0 is always the depot.
+    # Index 1...n are the delivery locations.
+
     all_addresses = [
         request.depot_address,
         *[
@@ -161,17 +171,17 @@ def optimize_route(
     ]
 
     # ------------------------------------------------------------------------
-    # 3. GET REAL TRAVEL-TIME MATRIX
+    # 3. GEOCODE + TRAVEL-TIME MATRIX
     # ------------------------------------------------------------------------
 
     try:
-        time_matrix = fetch_distance_matrix(
+        time_matrix, coordinates = fetch_route_data(
             all_addresses
         )
 
     except ValueError as exc:
         logger.warning(
-            "Distance matrix error: %s",
+            "Distance / geocoding error: %s",
             exc,
         )
 
@@ -182,7 +192,7 @@ def optimize_route(
 
     except http_requests.RequestException as exc:
         logger.error(
-            "OpenRouteService API unreachable: %s",
+            "Routing service request failed: %s",
             exc,
         )
 
@@ -191,7 +201,7 @@ def optimize_route(
             detail=(
                 "Could not reach the routing service. "
                 "Check your internet connection or "
-                "OpenRouteService API key."
+                "API key."
             ),
         )
 
@@ -199,7 +209,9 @@ def optimize_route(
     # 4. BUILD TIME WINDOWS
     # ------------------------------------------------------------------------
 
-    time_windows = [_DEPOT_WINDOW]
+    time_windows = [
+        _DEPOT_WINDOW
+    ]
 
     for delivery in request.deliveries:
 
@@ -263,10 +275,26 @@ def optimize_route(
     )
 
     # ------------------------------------------------------------------------
-    # 7. BUILD GOOGLE MAPS VISUALIZATION
+    # 7. GET OPTIMIZED ADDRESS SEQUENCE
+    # ------------------------------------------------------------------------
     #
-    # OR-Tools decides the order.
-    # Google Maps only displays that optimized order.
+    # IMPORTANT:
+    #
+    # OR-Tools has already selected the order.
+    #
+    # We now preserve that exact order when requesting road geometry.
+    #
+    # Example:
+    #
+    #   Depot
+    #      ↓
+    #   FSM
+    #      ↓
+    #   Falaise
+    #      ↓
+    #   Ribat
+    #
+    # Directions must receive exactly that sequence.
     # ------------------------------------------------------------------------
 
     optimized_addresses = [
@@ -279,6 +307,110 @@ def optimize_route(
             status_code=422,
             detail="The optimizer returned an empty route.",
         )
+
+    # ------------------------------------------------------------------------
+    # 8. MAP ADDRESS → COORDINATES
+    # ------------------------------------------------------------------------
+    #
+    # The coordinates were generated in the original input order.
+    #
+    # We now reorder them according to the OR-Tools solution.
+    #
+    # This produces:
+    #
+    #   [depot, optimized stop 1, optimized stop 2, ...]
+    #
+    # which is exactly what the Directions API needs.
+    # ------------------------------------------------------------------------
+
+    coordinate_by_address = {
+        address: coordinates[index]
+        for index, address in enumerate(all_addresses)
+    }
+
+    try:
+        optimized_coordinates = [
+            coordinate_by_address[address]
+            for address in optimized_addresses
+        ]
+
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Could not match an optimized stop "
+                f"to its coordinates: {exc}"
+            ),
+        )
+
+    # ------------------------------------------------------------------------
+    # 9. CALCULATE ACTUAL ROAD GEOMETRY
+    # ------------------------------------------------------------------------
+    #
+    # This is deliberately AFTER OR-Tools.
+    #
+    # OR-Tools decides:
+    #
+    #   which stop comes first,
+    #   which stop comes second,
+    #   etc.
+    #
+    # Directions then calculates:
+    #
+    #   the actual roads connecting those stops.
+    # ------------------------------------------------------------------------
+
+    logger.info(
+        "Calculating road geometry for optimized sequence..."
+    )
+
+    try:
+        route_geometry = fetch_route_geometry(
+            optimized_coordinates
+        )
+
+    except ValueError as exc:
+        logger.warning(
+            "Route geometry error: %s",
+            exc,
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "The route was optimized successfully, "
+                "but the road geometry could not be calculated. "
+                f"{exc}"
+            ),
+        )
+
+    except http_requests.RequestException as exc:
+        logger.error(
+            "Directions API request failed: %s",
+            exc,
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The route was optimized successfully, "
+                "but the routing service could not calculate "
+                "the road geometry."
+            ),
+        )
+
+    logger.info(
+        "Road geometry received: %d points",
+        len(route_geometry),
+    )
+
+    # ------------------------------------------------------------------------
+    # 10. BUILD GOOGLE MAPS ROUTE
+    # ------------------------------------------------------------------------
+    #
+    # Google Maps is still available as an external navigation option.
+    # It receives the SAME optimized order selected by OR-Tools.
+    # ------------------------------------------------------------------------
 
     params = {
         "api": "1",
@@ -304,24 +436,58 @@ def optimize_route(
     )
 
     # ------------------------------------------------------------------------
-    # 8. BUILD RESPONSE
+    # 11. BUILD OPTIMIZED STOP RESPONSE
     # ------------------------------------------------------------------------
 
-    optimized_stops = [
-        OptimizedStop(
-            stop_number=stop["stop_number"],
-            address=stop["address"],
-            arrival_time=stop["arrival_time"],
-            time_window=stop["time_window"],
-            slot=stop["slot"],
-            maps_url=maps_url,
+    optimized_stops = []
+
+    for stop in solution_stops:
+
+        address = stop["address"]
+
+        if address not in coordinate_by_address:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Could not match optimized address "
+                    f"'{address}' to its coordinates."
+                ),
+            )
+
+        optimized_stops.append(
+            OptimizedStop(
+                stop_number=stop["stop_number"],
+                address=address,
+                coordinates=coordinate_by_address[address],
+                arrival_time=stop["arrival_time"],
+                time_window=stop["time_window"],
+                slot=stop["slot"],
+                maps_url=maps_url,
+            )
         )
-        for stop in solution_stops
-    ]
+
+    # ------------------------------------------------------------------------
+    # 12. RETURN COMPLETE ROUTE
+    # ------------------------------------------------------------------------
+    #
+    # The response now contains THREE separate pieces of information:
+    #
+    #   depot_coordinates
+    #       → depot marker
+    #
+    #   route
+    #       → numbered optimized delivery markers
+    #
+    #   route_geometry
+    #       → actual road line displayed on the map
+    # ------------------------------------------------------------------------
 
     return OptimizeRouteResponse(
         success=True,
         total_stops=len(optimized_stops),
         depot_address=request.depot_address,
+        depot_coordinates=coordinates[0],
         route=optimized_stops,
+        route_geometry=route_geometry,
     )
+

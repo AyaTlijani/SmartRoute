@@ -1,12 +1,18 @@
 import React from "react";
+import RouteMap from "./RouteMap";
 
 /**
  * RouteDisplay.jsx
  *
- * Displays the delivery sequence returned by OR-Tools.
+ * Displays the optimized delivery sequence returned by OR-Tools.
  *
  * The frontend does NOT reorder the stops.
  * The order received from the backend is the optimized order.
+ *
+ * The map receives:
+ *   - depot coordinates
+ *   - optimized delivery coordinates
+ *   - actual road geometry calculated by the Directions API
  */
 
 const SLOT_STYLES = {
@@ -28,7 +34,9 @@ export default function RouteDisplay({ route }) {
   const {
     total_stops,
     depot_address,
+    depot_coordinates,
     route: stops,
+    route_geometry,
   } = route;
 
   /*
@@ -42,15 +50,12 @@ export default function RouteDisplay({ route }) {
       className="mt-6"
       aria-label="Optimised delivery route"
     >
-
       {/* ============================================================
           SUMMARY
           ============================================================ */}
 
       <div className="bg-green-50 border border-green-200 rounded-2xl p-4 mb-5">
-
         <div className="flex items-start gap-3">
-
           <span
             className="text-2xl mt-0.5"
             aria-hidden="true"
@@ -59,7 +64,6 @@ export default function RouteDisplay({ route }) {
           </span>
 
           <div>
-
             <h2 className="text-base font-bold text-green-800">
               Route optimised — {total_stops}{" "}
               {total_stops === 1 ? "stop" : "stops"}
@@ -76,35 +80,39 @@ export default function RouteDisplay({ route }) {
               OR-Tools selected the delivery sequence while
               respecting the requested time windows.
             </p>
-
           </div>
-
         </div>
-
       </div>
 
+      {/* ============================================================
+          INTERACTIVE ROAD MAP
+          ============================================================ */}
+
+      <RouteMap
+        depot={{
+          address: depot_address,
+          coordinates: depot_coordinates,
+        }}
+        stops={stops}
+        routeGeometry={route_geometry}
+      />
 
       {/* ============================================================
           OPTIMISED ROUTE
           ============================================================ */}
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-5">
-
         <h3 className="text-sm font-bold text-gray-800 mb-4">
           Optimised Route
         </h3>
 
-
         <div className="space-y-0">
-
           {/* --------------------------------------------------------
               DEPOT
               -------------------------------------------------------- */}
 
           <div className="flex items-start gap-3">
-
             <div className="flex flex-col items-center">
-
               <div
                 className="w-9 h-9 rounded-full bg-gray-800
                   text-white flex items-center justify-center text-sm"
@@ -115,12 +123,9 @@ export default function RouteDisplay({ route }) {
               {stops.length > 0 && (
                 <div className="w-0.5 h-8 bg-gray-200" />
               )}
-
             </div>
 
-
             <div className="pt-1 min-w-0">
-
               <p className="text-xs font-semibold text-gray-500">
                 DEPOT
               </p>
@@ -131,18 +136,14 @@ export default function RouteDisplay({ route }) {
               >
                 {depot_address}
               </p>
-
             </div>
-
           </div>
-
 
           {/* --------------------------------------------------------
               OPTIMISED DELIVERY SEQUENCE
               -------------------------------------------------------- */}
 
           {stops.map((stop, index) => {
-
             const style =
               SLOT_STYLES[stop.slot] ?? SLOT_STYLES[1];
 
@@ -154,10 +155,9 @@ export default function RouteDisplay({ route }) {
                 key={stop.stop_number}
                 className="flex items-start gap-3"
               >
-
                 {/* Route number + connector */}
-                <div className="flex flex-col items-center">
 
+                <div className="flex flex-col items-center">
                   <div
                     className="w-9 h-9 rounded-full bg-blue-600
                       text-white flex items-center justify-center
@@ -169,13 +169,11 @@ export default function RouteDisplay({ route }) {
                   {!isLast && (
                     <div className="w-0.5 h-8 bg-gray-200" />
                   )}
-
                 </div>
 
-
                 {/* Stop information */}
-                <div className="pt-1 pb-4 min-w-0 flex-1">
 
+                <div className="pt-1 pb-4 min-w-0 flex-1">
                   <p className="text-xs font-semibold text-gray-500">
                     DELIVERY {stop.stop_number}
                   </p>
@@ -188,16 +186,14 @@ export default function RouteDisplay({ route }) {
                     {stop.address}
                   </p>
 
+                  {/* ETA + time window */}
 
-                  {/* ETA + separator + time window */}
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
-
                     <span
                       className="inline-flex items-center gap-1
                         text-xs font-bold text-blue-700
                         bg-blue-50 rounded-full px-2 py-0.5"
                     >
-
                       <svg
                         className="w-3 h-3"
                         fill="none"
@@ -219,9 +215,7 @@ export default function RouteDisplay({ route }) {
                       </svg>
 
                       ETA {stop.arrival_time}
-
                     </span>
-
 
                     <span
                       className="text-xs text-gray-400"
@@ -230,31 +224,24 @@ export default function RouteDisplay({ route }) {
                       •
                     </span>
 
-
                     <span
                       className={`text-xs font-semibold
                         rounded-full px-2 py-0.5 ${style.badge}`}
                     >
                       {style.label} · {stop.time_window}
                     </span>
-
                   </div>
-
                 </div>
-
               </div>
             );
           })}
-
         </div>
-
 
         {/* ========================================================
             GOOGLE MAPS — COMPLETE OPTIMISED ROUTE
             ======================================================== */}
 
         {fullRouteMapsUrl && (
-
           <a
             href={fullRouteMapsUrl}
             target="_blank"
@@ -266,7 +253,6 @@ export default function RouteDisplay({ route }) {
               text-white font-bold text-sm px-4 py-3
               rounded-xl transition-all duration-150 shadow-sm"
           >
-
             <svg
               className="w-5 h-5"
               fill="currentColor"
@@ -283,13 +269,9 @@ export default function RouteDisplay({ route }) {
             </svg>
 
             View Full Route in Google Maps →
-
           </a>
-
         )}
-
       </div>
-
 
       {/* ============================================================
           FOOTER
@@ -297,9 +279,9 @@ export default function RouteDisplay({ route }) {
 
       <p className="text-center text-xs text-gray-400 mt-5">
         Route computed by OR-Tools VRPTW &nbsp;•&nbsp;
-        Travel times via OpenRouteService
+        Travel times and road geometry via OpenRouteService
       </p>
-
     </section>
   );
 }
+
