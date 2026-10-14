@@ -58,16 +58,30 @@ def _estimated_matrix(coordinates: List[List[float]]) -> List[List[int]]:
 # PUBLIC API
 # ============================================================================
 
+def _check(r) -> None:
+    """Raise with ORS's own error message, so the log says what went wrong."""
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("error")
+            detail = detail.get("message", detail) if isinstance(detail, dict) else detail
+        except ValueError:
+            detail = r.text[:200]
+        raise RuntimeError(f"HTTP {r.status_code}: {detail}")
+
+
 def time_matrix_for_coordinates(coordinates: List[List[float]]) -> Tuple[List[List[int]], str]:
     """Driving-time matrix in minutes. Returns (matrix, "ors" | "estimate")."""
     if USE_ORS:
         try:
             r = requests.post(_MATRIX_URL, json={"locations": coordinates, "metrics": ["duration"]},
                               headers={"Authorization": ORS_API_KEY}, timeout=30)
-            r.raise_for_status()
+            _check(r)
             durations = r.json()["durations"]
-            return [[UNREACHABLE_TIME if s is None else max(0, round(s / 60)) for s in row]
-                    for row in durations], "ors"
+            # A point ORS can't place on a road gives null for its pairs. Estimate
+            # those pairs instead of calling the stop unreachable.
+            estimate = _estimated_matrix(coordinates)
+            return [[estimate[i][j] if s is None else max(0, round(s / 60)) for j, s in enumerate(row)]
+                    for i, row in enumerate(durations)], "ors"
         except Exception as exc:  # network, quota, bad key, > 50 locations on the free plan
             log.warning("ORS matrix failed, using estimate: %s", exc)
     return _estimated_matrix(coordinates), "estimate"
@@ -83,9 +97,13 @@ def road_route_for_coordinates(coordinates: List[List[float]]):
     """
     if USE_ORS:
         try:
-            r = requests.post(_DIRECTIONS_URL, json={"coordinates": coordinates},
+            # radiuses -1: snap each point to the nearest road however far it is.
+            # By default ORS searches 350 m, and one stop in a park or by the
+            # sea would fail the whole route.
+            r = requests.post(_DIRECTIONS_URL,
+                              json={"coordinates": coordinates, "radiuses": [-1] * len(coordinates)},
                               headers={"Authorization": ORS_API_KEY}, timeout=30)
-            r.raise_for_status()
+            _check(r)
             feature = r.json()["features"][0]
             summary = feature["properties"]["summary"]
             geometry = feature["geometry"]["coordinates"]
