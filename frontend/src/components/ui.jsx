@@ -256,3 +256,22 @@ export function ToastProvider({ children }) {
 }
 
 export const useToast = () => useContext(ToastContext);
+
+// Where a driver is in their working day.
+export function dayStateOf(ds) {
+  if (!ds || !ds.started_at) return "not_started";
+  if (ds.received_at) return "reconciled";
+  if (ds.ended_at) return "finished";
+  return "on_road";
+}
+
+export function DayStateBadge({ state, since }) {
+  const map = {
+    not_started: ["neutral", "Not started"],
+    on_road: ["brand", since ? `On the road since ${since.slice(11, 16)}` : "On the road"],
+    finished: ["warn", "Finished, cash to confirm"],
+    reconciled: ["good", "Day closed"],
+  };
+  const [tone, label] = map[state] || map.not_started;
+  return <Badge tone={tone}>{label}</Badge>;
+}

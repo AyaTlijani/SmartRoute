@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { CheckCircle2, Download, FileSpreadsheet, Pencil, Upload } from "lucide-react";
-import { api, download, dt, errorText, formatDay } from "../../api";
+import { CheckCircle2, Download, FileSpreadsheet, Lock, Pencil, Upload } from "lucide-react";
+import { api, download, dt, errorText, formatDay, todayISO } from "../../api";
 import { DayPicker, useDay } from "../../layouts/AdminLayout";
 import {
-  Badge, Button, ErrorBanner, Field, Input, Modal, PageHeader, Panel, Spinner, cx, useToast,
+  Badge, Button, EmptyState, ErrorBanner, Field, Input, Modal, PageHeader, Panel, Spinner, cx, useToast,
 } from "../../components/ui";
 
 const SLOT = { 0: "Any time", 1: "Morning", 2: "Afternoon" };
@@ -108,7 +108,13 @@ export default function Import() {
         </div>
       )}
 
-      {!validation && (
+      {day < todayISO() && (
+        <Panel><EmptyState icon={Lock} title="Past days are read-only">
+          Orders can only be imported for today or a future day. Use the day picker to choose one.
+        </EmptyState></Panel>
+      )}
+
+      {!validation && day >= todayISO() && (
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
           <Panel title="Upload" bodyClass="p-5">
             <label

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, ChevronRight, Info, OctagonAlert, Truck } from "lucide-react";
 import { api, dt, errorText, formatDay } from "../../api";
 import { DayPicker, useDay } from "../../layouts/AdminLayout";
-import { Button, EmptyState, ErrorBanner, Loading, Metric, MetricStrip, PageHeader, Panel, cx } from "../../components/ui";
+import { Button, DayStateBadge, EmptyState, ErrorBanner, Loading, Metric, MetricStrip, PageHeader, Panel, cx } from "../../components/ui";
 
 const LEVEL = {
   critical: { icon: OctagonAlert, color: "text-red-700", bar: "bg-red-600" },
@@ -84,20 +84,23 @@ function Body({ data }) {
               {data.fleet.map((f) => {
                 const done = f.delivered + f.failed;
                 return (
-                  <li key={f.id} className="px-5 py-3">
-                    <div className="flex items-baseline justify-between gap-3">
+                  <li key={f.id}>
+                   <Link to={`/admin/dispatch?driver=${f.id}`} className="block px-5 py-3 hover:bg-slate-50">
+                    <div className="flex items-center justify-between gap-3">
                       <span className="text-sm font-medium">{f.name}</span>
-                      <span className="text-[13px] tabular text-ink-500">{done} of {f.total} stops</span>
+                      <DayStateBadge state={f.state} since={f.started_at} />
                     </div>
+                    <p className="mt-1 text-[13px] tabular text-ink-500">{done} of {f.total} stops</p>
                     <div className="mt-2 flex h-1.5 overflow-hidden rounded-full bg-slate-100" role="img"
                       aria-label={`${f.delivered} delivered, ${f.failed} failed, ${f.total - done} left`}>
-                      <span className="bg-emerald-600" style={{ width: `${(100 * f.delivered) / f.total}%` }} />
-                      <span className="bg-red-600" style={{ width: `${(100 * f.failed) / f.total}%` }} />
+                      <span className="bg-emerald-600" style={{ width: `${f.total ? (100 * f.delivered) / f.total : 0}%` }} />
+                      <span className="bg-red-600" style={{ width: `${f.total ? (100 * f.failed) / f.total : 0}%` }} />
                     </div>
                     <p className="mt-1.5 text-xs tabular text-ink-500">
                       {f.delivered} delivered{f.failed ? `, ${f.failed} failed` : ""}, {dt(f.cash_collected)} collected
-                      {f.end_time && `, back at depot around ${f.end_time}`}
+                      {f.state !== "finished" && f.state !== "reconciled" && f.end_time && `, back at depot around ${f.end_time}`}
                     </p>
+                   </Link>
                   </li>
                 );
               })}

@@ -9,12 +9,15 @@ SmartRoute is a web app for a small delivery company in Tunisia. It covers one d
 
 1. An admin signs in and uploads an Excel file of confirmed orders.
 2. The app checks every row. The admin fixes or excludes problem rows, then imports.
-3. Orders are assigned to drivers by governorate, capacity and distance.
-4. Each driver's stops are ordered by an OR-Tools route solver with time windows.
-5. Each driver signs in on a phone and sees only their own stops. For each stop they record delivered (cash + optional photo) or failed (reason).
-6. The admin follows progress on Overview, decides on failed orders (retry next day), and reads Analytics.
+3. "Plan routes" assigns orders to drivers, with the zone rule or the fleet optimizer, and sequences every route with OR-Tools and time windows.
+4. Each driver signs in on a phone and sees only their own stops:
+   - ticks off the packages while loading, then starts the route
+   - records each stop as delivered (cash + optional photo) or failed (reason)
+   - can re-plan the remaining stops from where they are
+   - ends the day by declaring the cash handed over
+5. The admin follows progress on Overview, confirms each driver's cash, decides on failed orders (retry), and reads Analytics.
 
-The original "Quick planner" (typed addresses to one route) is still available to admins.
+Past days are read-only.
 
 
 ## 2. Stack
@@ -106,6 +109,15 @@ routes (one row per driver per day)
 - end_time: when the driver is back at the depot
 - baseline_minutes, baseline_late: the nearest-neighbour route on the same matrix
 
+driver_days (one row per driver per working day)
+- driver_id, day
+- started_at: "Start route"
+- last_lat, last_lng: position sent with "Re-plan from here"
+- ended_at, cash_declared: "End day"
+- cash_received, received_at, received_by: the admin's confirmation
+
+Driver day: not started → on the road (started_at) → finished (ended_at) → closed (received_at).
+
 Order lifecycle:
 
     pending  --assign / manual-->  assigned  --driver-->  delivered | failed
@@ -176,61 +188,94 @@ Review screen:
 - On import, the server checks the ticked rows again and saves those without errors as pending. The page reports imported, rejected and excluded counts.
 
 
-## 8. Assignment
+## 8. Assignment (planning.py)
 
-`POST /dispatch/assign` handles the day's pending orders, sorted by governorate then latitude.
+`POST /dispatch/plan {day, mode}` re-plans a day that is today or later:
+1. Open orders of drivers who haven't started (and of inactive drivers) go back to pending. Drivers already on the road keep theirs.
+2. Pending orders are assigned with the chosen mode.
+3. Every driver's route is sequenced (section 9).
 
-- **Eligible driver:** active, covers the governorate, has fewer than max_orders orders that day.
-- **Choice:** the lowest score wins:
+**Eligible driver:** active, covers the governorate, has fewer than max_orders orders that day.
 
-      score = orders already assigned + 0.5 × km from the order to the average position of the driver's orders
-              (the depot when the driver has none)
+**Zone rule** (`mode = "zones"`): orders are processed by governorate, then latitude. The eligible driver with the lowest score wins:
 
-- **No eligible driver:** the order stays pending, with a reason:
-  - "No driver covers X"
-  - "All drivers covering X are inactive"
-  - "All drivers covering X are full"
+    score = orders already assigned + 0.5 × km from the order to the average position of the driver's orders
+            (the depot when the driver has none)
 
-Manual reassignment (`POST /orders/{id}/reassign`):
-- The server checks the same eligibility and returns 400 with the reason.
+**Fleet optimizer** (`mode = "optimizer"`): one OR-Tools model for every driver who hasn't started.
+- Vehicles are the drivers, each starting and ending at their own depot.
+- Each order may only be served by drivers covering its governorate (the solver's vehicle variable is restricted to those drivers).
+- Each driver serves at most max_orders minus orders already finished that day.
+- Time windows and the 10-minute service time are as in section 9.
+- The objective is total driving time over the fleet, with a penalty of 100,000 per order left out.
+- The search runs for 5 seconds.
+- Orders it can't fit stay pending with the reason. Leftovers can still go to drivers already on the road, by the zone rule.
+
+**Unassigned reasons:**
+- "No driver covers X."
+- "All drivers covering X are inactive."
+- "All drivers covering X are full."
+- The optimizer's own reason.
+- "Not planned yet."
+
+**Manual reassignment** (`POST /orders/{id}/reassign`):
+- The server checks eligibility and refuses a driver who has ended the day.
 - The Dispatch dropdown only lists eligible drivers.
-- Both affected routes are recomputed.
+- Both affected routes are re-sequenced.
 
 When a driver is deactivated, or a zone is removed from them, their open orders from today on go back to pending.
 
 
-## 9. Route optimization
+## 9. Route sequencing (planning.route_driver)
 
-`dispatch._route_driver` runs for one driver and day:
-- **Input:** orders with status "assigned". Delivered and failed orders are left untouched and keep their stop numbers; new stop numbers continue after them.
-- **Time model:** minutes after 9:00 AM.
-  - depot: 0–540 (back by 6:00 PM)
-  - any time: 0–480
-  - morning: 0–180
-  - afternoon: 240–480
-  - 10 minutes service per stop
-- **Solver** (`vrptw_solver.py`): OR-Tools routing with a time dimension and the windows above. It minimizes total travel time, starting and ending at the depot.
-  - First solution: parallel cheapest insertion.
-  - Improvement: guided local search for 1 second (8 stops or fewer) or 2 seconds.
-  - Every stop is optional with a penalty of 100,000, so an impossible stop is skipped instead of making the whole route infeasible. The solution is good, not proven optimal.
-- **Skipped stops** keep status "assigned" with no stop number, plus an unscheduled_reason:
-  - "Too far to reach in its ... window: N min from the depot, window closes at ..."
-  - "Can't reach it and return to the depot within the working day"
-  - "The route is full in its ... window"
+**Input:** the driver's orders with status "assigned". Delivered and failed orders are left untouched and keep their stop numbers; new stop numbers continue after them.
 
-  The Dispatch page, the order detail, the driver screen and the Overview page all show it.
-- **Scoring:** `route_eval.simulate` drives the route on the same matrix (waiting if early, counting late stops). The nearest-neighbour route is scored the same way. Both results are stored in the routes table.
+**Time model:** minutes after 9:00 AM.
+- depot: 0–540 (back by 6:00 PM)
+- any time: 0–480
+- morning: 0–180
+- afternoon: 240–480
+- 10 minutes service per stop
 
-Benchmark: `python evaluate.py` runs 30 generated days, with and without time windows. It compares Excel order, latitude order, nearest neighbour and OR-Tools on identical inputs. Results are in `backend/evaluation_results.md`.
+**Start point:**
+- Before the driver starts, or for a future day: the depot at 9:00.
+- Once the driver has started (today), from the current time and from the first available of:
+  1. the position sent with "Re-plan from here"
+  2. the last stop they finished
+  3. the depot
+
+  This applies to every re-plan of that driver: the admin's Plan routes, a reassignment, or the driver's own button.
+
+**Solver** (`vrptw_solver.solve`): OR-Tools routing with a time dimension, the windows above, and an optional capacity dimension and allowed vehicles (used by the fleet optimizer). It minimizes travel time.
+- **Construction:** parallel cheapest insertion builds a first solution.
+- **Improvement:** guided local search keeps improving it for 1 second (8 stops or fewer) or 2 seconds.
+- Every stop is optional with a penalty of 100,000, so an impossible stop is skipped instead of making the route infeasible.
+- The solution is good, not proven optimal.
+
+**Skipped stops** keep status "assigned" with no stop number, plus an unscheduled_reason:
+- "Its ... window closed at ..."
+- "Too far to reach in its ... window: earliest arrival ..., window closes at ..."
+- "Can't reach it and get back to the depot by 6:00 PM."
+- "The route is full in its ... window"
+
+**Scoring:** `route_eval.simulate` drives the chosen route on the same matrix from the same start (waiting if early, counting late stops). The nearest-neighbour route is scored the same way. Both are stored in the routes table.
+
+**Benchmark:** `python evaluate.py` has three scenarios:
+1. 30 generated days with time windows: Excel order, latitude order, nearest neighbour and OR-Tools compared.
+2. The same days without time windows.
+3. 10 whole-fleet days: the zone rule against the fleet optimizer.
+
+Results are in `backend/evaluation_results.md`.
 
 
 ## 10. Admin pages
 
-The sidebar holds Overview, Import orders, Dispatch, Orders, Drivers, Analytics, and Quick planner under Tools. Overview, Import, Dispatch and Orders share a day picker (previous/next/today).
+The sidebar holds Overview, Import orders, Dispatch, Orders, Drivers and Analytics. Overview, Import, Dispatch and Orders share a day picker (previous/next/today). On a past day, Import and Dispatch are read-only, but cash handovers can still be confirmed.
 
 **Overview** (`GET /overview?day=`):
 - Order counts, completion %, delivered-on-attempt %, cash collected vs expected, active drivers.
 - **Needs attention** items, each linking to the right page:
+  - cash handovers to confirm (shown first; critical when the declared amount differs from the recorded deliveries)
   - no orders
   - unassigned orders
   - stops off the route
@@ -244,7 +289,10 @@ The sidebar holds Overview, Import orders, Dispatch, Orders, Drivers, Analytics,
 **Dispatch**:
 - Summary strip, driver list (load/capacity, progress, driving minutes) and an Unassigned entry.
 - Selected driver: driving time, distance, return time, cash, the comparison with nearest-stop-first, the map (stop markers colored by status), and the stop table with eligible-driver dropdowns.
-- Buttons: Assign, and Re-optimize (recompute all routes).
+- "Plan routes" opens a dialog to choose the zone rule or the fleet optimizer. It says which drivers are already on the road and will keep their stops. A summary toast gives orders on routes, total driving and orders not served.
+- Each driver shows their day state: not started, on the road since HH:MM, finished (cash to confirm), or day closed.
+- When a driver has ended the day, their panel shows the declared cash against the cash their deliveries recorded, and a "Confirm receipt" form for the amount counted.
+- Selecting a driver updates the address (`?driver=id`), so Overview items link straight to them.
 - Refreshes every 15 seconds.
 
 **Orders**:
@@ -257,12 +305,19 @@ The sidebar holds Overview, Import orders, Dispatch, Orders, Drivers, Analytics,
 
 **Analytics**: see section 12.
 
-**Quick planner**: the original form. It needs ORS_API_KEY; without it, the server answers 503 with that explanation.
 
 
 ## 11. Driver app (phone)
 
-Address `/driver`; only reachable with a driver session.
+Address `/driver`; only reachable with a driver session. Always shows today.
+
+**Before starting:**
+- A "Load your packages" checklist shows every package (product, customer, cash), listed with the last stop first so the first delivery ends up on top.
+- "Start route" unlocks once all packages are ticked; "Mark all as loaded" ticks everything.
+- Starting records the time and re-plans the route from now, so arrival times are real.
+- The server refuses deliveries and failures before the start (409).
+
+**On the road:**
 
 - **Header:** name, day, stops done, cash collected vs to collect, progress bar, planned return time.
 - **Tabs:**
@@ -279,7 +334,13 @@ Address `/driver`; only reachable with a driver session.
   - Failed: reason (No answer, Not at home, Customer refused, Address not found, Other) and an optional note.
   - The phone's position is sent if available within 3 seconds. Without GPS, the action is still saved.
 - **Duplicate protection:** the button locks after one tap, and the server answers 409 if the order is no longer open. The app treats that as already saved.
+- **Re-plan from here:** sends the phone's position, if available, and re-sequences the remaining stops from there, starting now. Morning stops that can no longer be reached are listed with the reason.
 - **Refresh:** every 30 seconds, so route changes made by dispatch appear.
+
+**End of day:**
+- When no routed stop is left, an "End day" panel asks for the cash handed over, pre-filled with the cash the deliveries recorded, and warns about any difference.
+- Stops that never fitted the route go back to dispatch as pending.
+- After ending, the screen shows the declared amount and whether the office has confirmed it. Undo and new actions are locked.
 
 
 ## 12. Analytics definitions
@@ -322,13 +383,13 @@ Charts and tables:
                 GET  /excel/template, GET /excel/sample?day=
                 POST /orders/validate (form: file, day), POST /orders/revalidate, POST /orders/import
                 GET  /orders?day=, GET /orders/{id}, DELETE /orders?day= (open orders without attempts)
-                POST /dispatch/assign, POST /dispatch/reoptimize, GET /dispatch?day=
+                POST /dispatch/plan {day, mode: zones|optimizer}, GET /dispatch?day=
                 POST /orders/{id}/reassign, POST /orders/{id}/retry
                 GET  /drivers, POST /drivers, PUT /drivers/{id}, POST /drivers/{id}/password, GET /meta
                 GET  /analytics?days=7|30|90
                 POST /admin/demo/reset
-                POST /optimize-route (Quick planner)
-    Driver      GET  /me/day?day=
+                POST /drivers/{id}/days/{day}/receive {cash_received}
+    Driver      GET  /me/day, POST /me/start, POST /me/replan {lat?, lng?}, POST /me/end {cash_declared}
     Owner/admin POST /orders/{id}/deliver (form: cash_collected, lat?, lng?, photo?)
                 POST /orders/{id}/fail, POST /orders/{id}/undo, GET /orders/{id}/photo
 
@@ -337,7 +398,7 @@ Interactive docs: http://localhost:8000/docs
 
 ## 15. Tests
 
-`python -m pytest -q` in backend/ runs 17 end-to-end API tests. They use a temporary database and no API key, and cover:
+`python -m pytest -q` in backend/ runs 21 end-to-end API tests. They use a temporary database and no API key, and cover:
 - startup: no duplication on restart; accounts added to old databases
 - auth and roles
 - import errors, revalidation and persistence
@@ -351,7 +412,11 @@ Interactive docs: http://localhost:8000/docs
 - re-routing keeps finished stops
 - analytics totals checked against SQL; 7-day vs 30-day filter
 - overview attention items
-- Quick planner without a key
+- past days read-only
+- the driver's day: start, end, cash handover and its confirmation
+- re-planning from the current time and position
+- started drivers keep their stops when the admin re-plans
+- the fleet optimizer respects zones and capacity, and drives no more than the zone rule
 - clearing a day keeps finished orders
 
 
@@ -359,6 +424,7 @@ Interactive docs: http://localhost:8000/docs
 
 - Local demo security only: no HTTPS, rate limiting or password-reset email. The token lives in localStorage. Not suitable for real customer data on a public server.
 - Without an ORS key, travel times are estimates and the map shows straight lines.
+- The fleet optimizer requests one matrix for all depots and orders. The free OpenRouteService plan allows 50 locations per request, so larger days fall back to the estimate.
 - The location table holds about 40 places; elsewhere the governorate centre is used.
 - One depot per driver. No hubs, live tracking, SMS/WhatsApp or offline mode.
 - No failure-risk prediction model. Risk is shown with rules: past failed orders per phone.

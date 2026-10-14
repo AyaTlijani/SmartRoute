@@ -17,7 +17,6 @@ import Import from "./pages/admin/Import";
 import Dispatch from "./pages/admin/Dispatch";
 import Drivers from "./pages/admin/Drivers";
 import Analytics from "./pages/admin/Analytics";
-import Planner from "./pages/admin/Planner";
 import DriverApp from "./pages/driver/DriverApp";
 
 function Home() {
@@ -45,7 +44,6 @@ export default function App() {
         <Route path="dispatch" element={<Dispatch />} />
         <Route path="drivers" element={<Drivers />} />
         <Route path="analytics" element={<Analytics />} />
-        <Route path="planner" element={<Planner />} />
       </Route>
       <Route
         path="/driver"

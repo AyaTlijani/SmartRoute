@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { NavLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
 import {
-  BarChart3, ChevronLeft, ChevronRight, FileSpreadsheet, LayoutDashboard, LogOut, MapPinned,
+  BarChart3, ChevronLeft, ChevronRight, FileSpreadsheet, LayoutDashboard, LogOut,
   Menu, Package, Route, Users, X,
 } from "lucide-react";
 import { useAuth } from "../auth";
@@ -16,7 +16,6 @@ const NAV = [
   { to: "/admin/drivers", label: "Drivers", icon: Users },
   { to: "/admin/analytics", label: "Analytics", icon: BarChart3 },
 ];
-const TOOLS = [{ to: "/admin/planner", label: "Quick planner", icon: MapPinned }];
 
 export function Logo({ light }) {
   return (
@@ -63,10 +62,6 @@ function Sidebar({ onNavigate }) {
       <nav className="flex flex-col gap-0.5" aria-label="Main">
         {NAV.map((item) => <NavItem key={item.to} item={item} onClick={onNavigate} />)}
       </nav>
-      <p className="mt-6 px-3 pb-1 text-xs text-ink-300">Tools</p>
-      <nav className="flex flex-col gap-0.5" aria-label="Tools">
-        {TOOLS.map((item) => <NavItem key={item.to} item={item} onClick={onNavigate} />)}
-      </nav>
       <div className="mt-auto border-t border-white/10 px-2 pt-4">
         <p className="truncate text-sm font-medium text-white">{user?.full_name}</p>
         <p className="text-xs text-ink-300">Administrator</p>
@@ -83,7 +78,7 @@ export default function AdminLayout() {
   const [day, setDay] = useState(todayISO);
   const [open, setOpen] = useState(false);
   const location = useLocation();
-  const current = [...NAV, ...TOOLS].find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)));
+  const current = NAV.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)));
 
   return (
     <div className="min-h-screen lg:pl-60">

@@ -9,13 +9,15 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Camera, Check, ChevronDown, LogOut, MapPin, Navigation, Package, Phone, RotateCcw, StickyNote, X,
+  Camera, Check, ChevronDown, LogOut, MapPin, Navigation, Package, Phone, RefreshCw, RotateCcw, StickyNote, Truck, X,
 } from "lucide-react";
 import { api, dt, errorText, formatDay, toMapStop } from "../../api";
 import { useAuth } from "../../auth";
 import { Logo } from "../../layouts/AdminLayout";
 import RouteMap from "../../components/RouteMap";
-import { Badge, Button, CustomerBadge, ErrorBanner, Loading, PrecisionBadge, StatusBadge, cx, useToast } from "../../components/ui";
+import {
+  Badge, Button, CustomerBadge, ErrorBanner, Loading, PrecisionBadge, StatusBadge, cx, dayStateOf, useToast,
+} from "../../components/ui";
 
 const MAX_PHOTO = 8 * 1024 * 1024;
 
@@ -37,29 +39,43 @@ export default function DriverApp() {
   const [tab, setTab] = useState("route");
   const [openId, setOpenId] = useState(null);
   const [sheet, setSheet] = useState(null);
+  const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
 
   const load = () => api.get("/me/day").then((r) => setData(r.data)).catch((e) => setError(errorText(e)));
   useEffect(() => {
     load();
-    const t = setInterval(load, 30000); // picks up re-routing done by dispatch
+    const t = setInterval(load, 30000); // picks up changes made by dispatch
     return () => clearInterval(t);
   }, []);
 
-  const undo = async (o) => {
+  const act = async (key, fn, message, tone) => {
+    setBusy(key);
+    setError(null);
     try {
-      await api.post(`/orders/${o.id}/undo`);
-      toast(`${o.customer_name} is back on your route`, "info");
-      load();
+      const r = await fn();
+      if (r?.data?.orders) setData(r.data); else await load();
+      if (message) toast(message, tone);
     } catch (e) {
       setError(errorText(e));
+    } finally {
+      setBusy(null);
     }
   };
 
+  const replan = async () => {
+    const pos = await currentPosition();
+    act("replan", () => api.post("/me/replan", pos), pos.lat != null
+      ? "Remaining stops re-planned from your position" : "Remaining stops re-planned from your last stop", "info");
+  };
+
+  const state = dayStateOf(data?.day_state);
   const todo = data ? data.orders.filter((o) => o.status === "assigned") : [];
   const done = data ? data.orders.filter((o) => o.status !== "assigned") : [];
-  const next = todo.find((o) => o.stop_number) || todo[0];
+  const routedLeft = todo.filter((o) => o.stop_number);
+  const next = routedLeft[0] || todo[0];
   const active = openId ?? next?.id;
+  const closed = state === "finished" || state === "reconciled";
 
   return (
     <div className="min-h-screen bg-paper">
@@ -84,21 +100,25 @@ export default function DriverApp() {
               <span className="bg-emerald-500" style={{ width: `${data.orders.length ? (100 * data.stats.delivered) / data.orders.length : 0}%` }} />
               <span className="bg-red-500" style={{ width: `${data.orders.length ? (100 * data.stats.failed) / data.orders.length : 0}%` }} />
             </div>
-            {data.route && <p className="mt-2 text-xs text-ink-300">Planned return to {data.depot_name} around {data.route.end_time}</p>}
+            {state === "on_road" && data.route && data.orders.some((o) => o.status === "assigned" && o.stop_number) && <p className="mt-2 text-xs text-ink-300">Back at {data.depot_name} around {data.route.end_time}</p>}
           </div>
         )}
       </header>
 
       <main className="mx-auto max-w-lg px-4 pb-28 pt-4">
         <ErrorBanner error={error} onClose={() => setError(null)} />
-        {!data ? <Loading label="Loading your deliveries" /> : data.orders.length === 0 ? (
+        {!data ? <Loading label="Loading your deliveries" /> : data.orders.length === 0 && !closed ? (
           <div className="rounded-lg border border-slate-200 bg-white p-6 text-center">
             <Package className="mx-auto h-8 w-8 text-ink-300" />
             <p className="mt-3 font-semibold">No deliveries assigned today</p>
-            <p className="mt-1 text-sm text-ink-500">When dispatch assigns your orders they appear here. This page refreshes on its own.</p>
+            <p className="mt-1 text-sm text-ink-500">When dispatch plans your route it appears here. This page refreshes on its own.</p>
           </div>
+        ) : state === "not_started" ? (
+          <LoadingChecklist data={data} busy={busy === "start"}
+            onStart={() => act("start", () => api.post("/me/start"), "Route started. Arrival times now count from now.")} />
         ) : (
           <>
+            {closed && <DayClosed data={data} />}
             <div className="mb-4 grid grid-cols-3 rounded-lg bg-slate-200 p-1 text-sm font-medium" role="tablist">
               {[["route", `To do (${todo.length})`], ["map", "Map"], ["done", `Done (${done.length})`]].map(([k, l]) => (
                 <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
@@ -111,24 +131,29 @@ export default function DriverApp() {
                 <RouteMap bare height="h-[60vh]" depot={{ coordinates: [data.depot_lng, data.depot_lat], address: data.depot_name }}
                   stops={data.orders.filter((o) => o.stop_number).map(toMapStop)} routeGeometry={data.route?.geometry}
                   straightLines={data.route?.source !== "ors"} />
-                <p className="px-4 py-2 text-xs text-ink-500">Green stops are delivered, red failed, blue still to do. Lines show stop order, not roads.</p>
+                <p className="px-4 py-2 text-xs text-ink-500">Green stops are delivered, red failed, blue still to do. The line is your remaining route in order, not the roads.</p>
               </div>
             )}
 
-            {tab === "route" && (
+            {tab === "route" && !closed && (
               <div className="space-y-2">
-                {todo.length === 0 && (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-6 text-center">
-                    <Check className="mx-auto h-8 w-8 text-emerald-700" />
-                    <p className="mt-2 font-semibold text-emerald-900">Route finished</p>
-                    <p className="text-sm text-emerald-800">Hand over {dt(data.stats.cash_collected)} at {data.depot_name}.</p>
+                {routedLeft.length > 0 && (
+                  <div className="flex items-center justify-between gap-3 pb-1">
+                    <p className="text-[13px] text-ink-500">Running late or took a detour?</p>
+                    <Button size="sm" variant="secondary" icon={RefreshCw} loading={busy === "replan"} onClick={replan}>Re-plan from here</Button>
                   </div>
+                )}
+                {routedLeft.length === 0 && (
+                  <EndDay data={data} busy={busy === "end"}
+                    onEnd={(cash) => act("end", () => api.post("/me/end", { cash_declared: cash }), "Day closed. Hand the cash to the office.")} />
                 )}
                 {todo.map((o) => (
                   <Stop key={o.id} o={o} isNext={o.id === next?.id} open={o.id === active} onOpen={() => setOpenId(o.id === active ? -1 : o.id)} />
                 ))}
               </div>
             )}
+
+            {tab === "route" && closed && <p className="py-6 text-center text-sm text-ink-500">Nothing left to deliver today.</p>}
 
             {tab === "done" && (
               <ul className="space-y-2">
@@ -143,9 +168,9 @@ export default function DriverApp() {
                       </p>
                     </div>
                     <StatusBadge status={o.status} />
-                    {!o.retry_order_id && (
-                      <button type="button" onClick={() => undo(o)} aria-label={`Undo ${o.customer_name}`}
-                        className="rounded p-2 text-ink-500 hover:bg-slate-100"><RotateCcw className="h-4 w-4" /></button>
+                    {!closed && !o.retry_order_id && (
+                      <button type="button" onClick={() => act(`undo${o.id}`, () => api.post(`/orders/${o.id}/undo`), `${o.customer_name} is back on your route`, "info")}
+                        aria-label={`Undo ${o.customer_name}`} className="rounded p-2 text-ink-500 hover:bg-slate-100"><RotateCcw className="h-4 w-4" /></button>
                     )}
                   </li>
                 ))}
@@ -156,7 +181,7 @@ export default function DriverApp() {
       </main>
 
       {/* Action bar for the open stop, within thumb reach */}
-      {data && tab === "route" && todo.find((o) => o.id === active) && (
+      {data && state === "on_road" && tab === "route" && todo.find((o) => o.id === active) && (
         <div className="fixed inset-x-0 bottom-0 z-[1100] border-t border-slate-200 bg-white pb-safe-bottom">
           <div className="mx-auto grid max-w-lg grid-cols-2 gap-2 px-4 py-3">
             <Button variant="secondary" size="lg" icon={X} onClick={() => setSheet({ type: "fail", order: todo.find((o) => o.id === active) })}
@@ -174,6 +199,83 @@ export default function DriverApp() {
         <FailSheet order={sheet.order} reasons={data.fail_reasons} onClose={() => setSheet(null)}
           onDone={() => { setSheet(null); setOpenId(null); toast(`Marked as failed: ${sheet.order.customer_name}`, "warn"); load(); }} />
       )}
+    </div>
+  );
+}
+
+// Before leaving the depot: tick every package as loaded, then start.
+function LoadingChecklist({ data, busy, onStart }) {
+  const stops = data.orders.filter((o) => o.status === "assigned");
+  const [loaded, setLoaded] = useState({});
+  const count = stops.filter((o) => loaded[o.id]).length;
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white">
+      <div className="border-b border-slate-200 px-4 py-3.5">
+        <p className="font-semibold">Load your packages</p>
+        <p className="text-[13px] text-ink-500">
+          {stops.length} packages, {dt(data.stats.cash_expected)} to collect. Load the last stop first so the first one is on top.
+        </p>
+      </div>
+      <ul className="divide-y divide-slate-100">
+        {[...stops].reverse().map((o) => (
+          <li key={o.id}>
+            <label className="flex cursor-pointer items-center gap-3 px-4 py-3">
+              <input type="checkbox" className="h-5 w-5 accent-brand" checked={!!loaded[o.id]}
+                onChange={(e) => setLoaded({ ...loaded, [o.id]: e.target.checked })} />
+              <span className="w-6 text-center text-sm font-semibold tabular text-ink-500">{o.stop_number ?? "–"}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{o.product || "Package"}</span>
+                <span className="block truncate text-[13px] text-ink-500">{o.customer_name}, {o.city || o.governorate}</span>
+              </span>
+              <span className="text-sm tabular">{dt(o.cod_amount)}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <div className="border-t border-slate-200 p-4">
+        <Button size="lg" className="w-full" icon={Truck} loading={busy} disabled={count < stops.length} onClick={onStart}>
+          {count < stops.length ? `${count} of ${stops.length} loaded` : "Start route"}
+        </Button>
+        <button type="button" className="mt-2 w-full text-center text-[13px] text-ink-500 underline"
+          onClick={() => setLoaded(Object.fromEntries(stops.map((o) => [o.id, true])))}>Mark all as loaded</button>
+      </div>
+    </div>
+  );
+}
+
+function EndDay({ data, busy, onEnd }) {
+  const [cash, setCash] = useState(String(data.stats.cash_collected));
+  const amount = Number(String(cash).replace(",", "."));
+  const unrouted = data.orders.filter((o) => o.status === "assigned" && !o.stop_number).length;
+  return (
+    <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+      <p className="flex items-center gap-2 font-semibold text-emerald-900"><Check className="h-5 w-5" /> All stops done</p>
+      <p className="mt-1 text-sm text-emerald-900">
+        Your deliveries recorded {dt(data.stats.cash_collected)}. Count the cash you are handing to the office.
+        {unrouted > 0 && ` ${unrouted} stop(s) that didn't fit your route will go back to dispatch.`}
+      </p>
+      <label className="mt-3 block text-sm font-medium text-emerald-950">Cash handed over (DT)
+        <input type="text" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)}
+          className="mt-1 block w-full rounded-md border border-emerald-300 bg-white px-3 py-3 text-lg font-semibold tabular focus:border-brand focus:outline-none" />
+      </label>
+      {Number.isFinite(amount) && Math.abs(amount - data.stats.cash_collected) > 0.05 && (
+        <p className="mt-1.5 text-sm text-amber-800">That is {dt(Math.abs(data.stats.cash_collected - amount))} {amount < data.stats.cash_collected ? "less" : "more"} than your deliveries recorded. The office will see the difference.</p>
+      )}
+      <Button size="lg" variant="success" className="mt-3 w-full" loading={busy} disabled={!Number.isFinite(amount) || amount < 0}
+        onClick={() => onEnd(amount)}>End day</Button>
+    </div>
+  );
+}
+
+function DayClosed({ data }) {
+  const ds = data.day_state;
+  return (
+    <div className={cx("mb-4 rounded-lg border p-4", ds.received_at ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50")}>
+      <p className="font-semibold">{ds.received_at ? "Day closed" : "Day ended, waiting for the office"}</p>
+      <p className="mt-1 text-sm">
+        You declared {dt(ds.cash_declared)} at {ds.ended_at.slice(11, 16)}.
+        {ds.received_at ? ` The office confirmed receiving ${dt(ds.cash_received)}.` : " The office will count it and confirm."}
+      </p>
     </div>
   );
 }
