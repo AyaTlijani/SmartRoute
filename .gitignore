@@ -1,20 +1,7 @@
-# Python virtual environments
-.venv/
-venv/
-.venu.venv/
-backend/.venv/
-backend/.venu.venv/
-
-# Python cache
-__pycache__/
-*.pyc
-
-# Environment variables
 .env
-
-# React
+.venv/
+__pycache__/
 node_modules/
 dist/
-
-# VS Code
-.vscode/
+*.db
+uploads/

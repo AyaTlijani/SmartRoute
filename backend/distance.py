@@ -7,19 +7,19 @@ SmartRoute uses the routing service for three separate jobs:
        Address → [longitude, latitude]
 
     2. Travel-time matrix
-       Used by OR-Tools to decide the optimal delivery order.
+       Used by OR-Tools to decide the optimized delivery order.
 
-    3. Route geometry
+    3. Route geometry + route metrics
        Used AFTER OR-Tools has selected the order, so the frontend
-       can draw the actual road route on the map.
+       can display the actual road route, distance, and driving time.
 
 Important distinction:
 
     Travel-time matrix
         → optimization input
 
-    Directions geometry
-        → visualization / navigation output
+    Directions route
+        → final road geometry + real route distance/duration
 
 The optimizer chooses:
 
@@ -41,9 +41,6 @@ from config import ORS_API_KEY
 # HEIGIT / OPENROUTESERVICE API ENDPOINTS
 # ============================================================================
 
-# The old api.openrouteservice.org domain is deprecated.
-# The current API is served through api.heigit.org.
-
 _GEOCODE_URL = (
     "https://api.heigit.org/pelias/v1/search"
 )
@@ -62,7 +59,6 @@ _DIRECTIONS_URL = (
 # CONSTANTS
 # ============================================================================
 
-# A very large travel time used when ORS reports that a pair is unreachable.
 UNREACHABLE_TIME = 999999
 
 
@@ -77,9 +73,6 @@ def _geocode_address(
     Convert a free-text address into:
 
         (longitude, latitude)
-
-    The current HeiGIT Pelias endpoint uses the API key
-    through the Authorization header.
     """
 
     headers = {
@@ -125,14 +118,14 @@ def _geocode_address(
 
     lon, lat = coordinates[:2]
 
-    return lon, lat
+    return float(lon), float(lat)
 
 
 def _geocode_all(
     addresses: List[str],
 ) -> List[List[float]]:
     """
-    Geocode all addresses while preserving their input order.
+    Geocode all addresses while preserving input order.
 
     Returns:
 
@@ -145,10 +138,7 @@ def _geocode_all(
     coordinates: List[List[float]] = []
 
     for address in addresses:
-
-        lon, lat = _geocode_address(
-            address
-        )
+        lon, lat = _geocode_address(address)
 
         coordinates.append(
             [lon, lat]
@@ -179,10 +169,9 @@ def fetch_route_data(
         driving time in minutes from address i to address j.
 
     coordinates:
-        ORS coordinates for every address in the same order
-        as the input addresses.
+        ORS coordinates for every address in input order.
 
-    Coordinates use:
+    Coordinates:
 
         [longitude, latitude]
     """
@@ -197,9 +186,7 @@ def fetch_route_data(
     # 1. GEOCODING
     # ------------------------------------------------------------------------
 
-    coordinates = _geocode_all(
-        addresses
-    )
+    coordinates = _geocode_all(addresses)
 
     # ------------------------------------------------------------------------
     # 2. MATRIX REQUEST
@@ -228,9 +215,7 @@ def fetch_route_data(
 
     data = response.json()
 
-    raw_durations = data.get(
-        "durations"
-    )
+    raw_durations = data.get("durations")
 
     if not raw_durations:
         raise ValueError(
@@ -252,7 +237,6 @@ def fetch_route_data(
     unreachable_pairs = []
 
     for i in range(n):
-
         for j in range(n):
 
             secs = raw_durations[i][j]
@@ -275,7 +259,7 @@ def fetch_route_data(
 
                 time_matrix[i][j] = max(
                     0,
-                    round(secs / 60),
+                    round(float(secs) / 60),
                 )
 
     # ------------------------------------------------------------------------
@@ -304,12 +288,16 @@ def fetch_route_data(
 
 
 # ============================================================================
-# ACTUAL ROAD ROUTE GEOMETRY
+# ACTUAL ROAD ROUTE
 # ============================================================================
 
 def fetch_route_geometry(
     coordinates: List[List[float]],
-) -> List[List[float]]:
+) -> Tuple[
+    List[List[float]],
+    float,
+    int,
+]:
     """
     Calculate the actual driving route for an already-optimized sequence.
 
@@ -324,20 +312,25 @@ def fetch_route_geometry(
             delivery_3,
         ]
 
-    The Directions API then returns the road geometry following:
-
-        depot → delivery_2 → delivery_1 → delivery_3
-
     Returns:
 
-        [
-            [longitude, latitude],
-            [longitude, latitude],
-            ...
-        ]
+        (
+            geometry,
+            distance_meters,
+            duration_seconds,
+        )
 
-    These coordinates represent the actual road geometry and are
-    intended for rendering on the frontend map.
+    geometry:
+        Actual road geometry in [longitude, latitude] format.
+
+    distance_meters:
+        Total driving distance of the calculated route.
+
+    duration_seconds:
+        Total estimated driving duration of the calculated route.
+
+    The distance and duration come from the same Directions API
+    response as the displayed geometry.
     """
 
     if len(coordinates) < 2:
@@ -370,19 +363,22 @@ def fetch_route_geometry(
 
     data = response.json()
 
-    features = data.get(
-        "features",
-        [],
-    )
+    features = data.get("features", [])
 
     if not features:
         raise ValueError(
-            "OpenRouteService returned no route geometry."
+            "OpenRouteService returned no route."
         )
 
-    geometry = (
-        features[0]
-        .get("geometry", {})
+    feature = features[0]
+
+    # ------------------------------------------------------------------------
+    # ROUTE GEOMETRY
+    # ------------------------------------------------------------------------
+
+    geometry = feature.get(
+        "geometry",
+        {},
     )
 
     geometry_coordinates = geometry.get(
@@ -395,7 +391,74 @@ def fetch_route_geometry(
             "without usable geometry."
         )
 
-    return geometry_coordinates
+    # ------------------------------------------------------------------------
+    # ROUTE METRICS
+    # ------------------------------------------------------------------------
+    #
+    # For GeoJSON directions responses, the route summary is contained
+    # inside feature.properties.summary.
+    #
+    # distance → meters
+    # duration → seconds
+    # ------------------------------------------------------------------------
+
+    properties = feature.get(
+        "properties",
+        {}
+    )
+
+    summary = properties.get(
+        "summary",
+        {}
+    )
+
+    distance_meters = summary.get(
+        "distance"
+    )
+
+    duration_seconds = summary.get(
+        "duration"
+    )
+
+    if distance_meters is None:
+        raise ValueError(
+            "OpenRouteService returned route geometry "
+            "but no route distance."
+        )
+
+    if duration_seconds is None:
+        raise ValueError(
+            "OpenRouteService returned route geometry "
+            "but no route duration."
+        )
+
+    return (
+        geometry_coordinates,
+        float(distance_meters),
+        int(round(float(duration_seconds))),
+    )
+
+
+# ============================================================================
+# BACKWARDS-COMPATIBLE GEOMETRY HELPER
+# ============================================================================
+
+def fetch_route_geometry_only(
+    coordinates: List[List[float]],
+) -> List[List[float]]:
+    """
+    Backwards-compatible helper returning only route geometry.
+
+    New code should use fetch_route_geometry() directly so that
+    distance and duration are available without making another
+    Directions API request.
+    """
+
+    geometry, _, _ = fetch_route_geometry(
+        coordinates
+    )
+
+    return geometry
 
 
 # ============================================================================
@@ -417,3 +480,99 @@ def fetch_distance_matrix(
 
     return time_matrix
 
+# ============================================================================
+# COORDINATE-BASED HELPERS (used by dispatch; work without an API key)
+# ============================================================================
+#
+# Dispatch already knows each order's coordinates (from the Excel file or
+# the offline Tunisia table), so no geocoding is needed. If an ORS key is
+# configured we ask ORS for real driving times and road geometry; if not,
+# or if ORS fails, we fall back to a distance-based estimate so the app
+# always works.
+# ----------------------------------------------------------------------------
+
+import math
+
+from config import USE_ORS
+
+_ROAD_FACTOR = 1.3  # roads are longer than straight lines
+
+
+def _haversine_km(a: List[float], b: List[float]) -> float:
+    """Great-circle distance between two [lng, lat] points, in km."""
+    lng1, lat1, lng2, lat2 = map(math.radians, [a[0], a[1], b[0], b[1]])
+    h = (
+        math.sin((lat2 - lat1) / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
+    )
+    return 6371 * 2 * math.asin(math.sqrt(h))
+
+
+def _estimate_minutes(km_road: float) -> int:
+    """City driving ~25 km/h, intercity ~70 km/h, plus 2 min to park."""
+    if km_road <= 0.01:
+        return 0
+    speed = 25 if km_road < 15 else 70
+    return round(km_road / speed * 60) + 2
+
+
+def _estimated_matrix(coordinates: List[List[float]]) -> List[List[int]]:
+    return [
+        [_estimate_minutes(_haversine_km(a, b) * _ROAD_FACTOR) for b in coordinates]
+        for a in coordinates
+    ]
+
+
+def time_matrix_for_coordinates(
+    coordinates: List[List[float]],
+) -> Tuple[List[List[int]], str]:
+    """
+    Driving-time matrix (minutes) for [lng, lat] points.
+
+    Returns (matrix, source) where source is "ors" or "estimate".
+    """
+    if USE_ORS:
+        try:
+            response = requests.post(
+                _MATRIX_URL,
+                json={"locations": coordinates, "metrics": ["duration"]},
+                headers={"Authorization": ORS_API_KEY},
+                timeout=30,
+            )
+            response.raise_for_status()
+            durations = response.json()["durations"]
+            matrix = [
+                [UNREACHABLE_TIME if s is None else max(0, round(s / 60)) for s in row]
+                for row in durations
+            ]
+            return matrix, "ors"
+        except Exception as exc:  # network, quota, bad key → fall back
+            print(f"[SmartRoute] ORS matrix failed, using estimate: {exc}")
+    return _estimated_matrix(coordinates), "estimate"
+
+
+def road_route_for_coordinates(
+    coordinates: List[List[float]],
+) -> Tuple[List[List[float]], float, int, str]:
+    """
+    Route through [lng, lat] points in the given order.
+
+    Returns (geometry, distance_m, duration_s, source). Without ORS the
+    geometry is straight segments between stops.
+    """
+    if USE_ORS:
+        try:
+            geometry, meters, seconds = fetch_route_geometry(coordinates)
+            return geometry, meters, seconds, "ors"
+        except Exception as exc:
+            print(f"[SmartRoute] ORS directions failed, using estimate: {exc}")
+
+    km = sum(
+        _haversine_km(a, b) * _ROAD_FACTOR
+        for a, b in zip(coordinates, coordinates[1:])
+    )
+    minutes = sum(
+        _estimate_minutes(_haversine_km(a, b) * _ROAD_FACTOR)
+        for a, b in zip(coordinates, coordinates[1:])
+    )
+    return [list(c) for c in coordinates], km * 1000, minutes * 60, "estimate"

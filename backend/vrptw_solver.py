@@ -224,6 +224,24 @@ def solve_vrptw(
         )
 
     # ========================================================================
+    # 6b. OPTIONAL: ALLOW SKIPPING STOPS
+    # ========================================================================
+    #
+    # With "drop_penalty" set, a stop that cannot fit its time window is
+    # left out (at a high cost) instead of making the whole route fail.
+    # The caller reports skipped stops back to the dispatcher.
+
+    drop_penalty = data.get("drop_penalty")
+
+    if drop_penalty:
+        for node_idx in range(n):
+            if node_idx != depot:
+                routing.AddDisjunction(
+                    [manager.NodeToIndex(node_idx)],
+                    int(drop_penalty),
+                )
+
+    # ========================================================================
     # 7. DRIVER START / END
     # ========================================================================
 
@@ -276,7 +294,9 @@ def solve_vrptw(
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
 
-    search_parameters.time_limit.seconds = 30
+    search_parameters.time_limit.seconds = int(
+        data.get("time_limit_seconds", 30)
+    )
 
     # ========================================================================
     # 9. SOLVE
@@ -337,7 +357,9 @@ def _extract_route(
 
             time_window = data["time_windows"][node]
 
-            if time_window[1] <= 180:
+            if "slots" in data:
+                slot_number = data["slots"][node]
+            elif time_window[1] <= 180:
                 slot_number = 1
             else:
                 slot_number = 2
@@ -345,6 +367,9 @@ def _extract_route(
             stops.append(
                 {
                     "stop_number": stop_number,
+                    # Index in the input list: lets callers map stops back
+                    # to their data even when two addresses are identical.
+                    "node": node,
                     "address": data["addresses"][node],
                     "arrival_minutes": arrival_minutes,
                     "arrival_time": _minutes_to_time_str(

@@ -1,168 +1,110 @@
 /**
- * App.jsx — SmartRoute root application component.
+ * App.jsx — SmartRoute shell.
  *
- * Handles:
- *   - Application state
- *   - Route optimization requests
- *   - Error/loading states
- *   - SmartRoute header/footer
+ * Simple hash routing (no router library):
+ *   #/import     admin uploads the day's Excel file
+ *   #/dispatch   assign orders to drivers, see routes and statuses
+ *   #/driver/3   phone view for driver 3
+ *   #/analytics  delivery performance
+ *   #/planner    the original address-based route planner
  */
 
-import React, { useState } from "react";
-import axios from "axios";
-import AddressForm from "./components/AddressForm";
-import RouteDisplay from "./components/RouteDisplay";
+import React, { useEffect, useState } from "react";
+import ImportView from "./components/ImportView";
+import DispatchView from "./components/DispatchView";
+import DriverView from "./components/DriverView";
+import AnalyticsView from "./components/AnalyticsView";
+import QuickPlanner from "./components/QuickPlanner";
+import { todayISO } from "./api";
 
-const API_URL =
-  import.meta.env.VITE_API_URL || "http://localhost:8000";
+const TABS = [
+  ["import", "1 · Import"],
+  ["dispatch", "2 · Dispatch"],
+  ["driver", "3 · Driver app"],
+  ["analytics", "Analytics"],
+  ["planner", "Quick planner"],
+];
+
+function readHash() {
+  const [, page = "import", arg] = window.location.hash.split("/");
+  return { page: TABS.some(([k]) => k === page) ? page : "import", arg };
+}
 
 export default function App() {
-  const [route, setRoute] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [route, setRoute] = useState(readHash);
+  const [day, setDay] = useState(todayISO);
 
-  /**
-   * Send the delivery request to the FastAPI backend.
-   */
-  const handleOptimize = async (formData) => {
-    setLoading(true);
-    setError(null);
-    setRoute(null);
+  useEffect(() => {
+    const onHash = () => setRoute(readHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
-    try {
-      const response = await axios.post(
-        `${API_URL}/optimize-route`,
-        formData
-      );
-
-      setRoute(response.data);
-
-      // Scroll to the results after React renders them.
-      setTimeout(() => {
-        document
-          .getElementById("results-section")
-          ?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          });
-      }, 100);
-
-    } catch (err) {
-      const detail = err.response?.data?.detail;
-
-      setError(
-        typeof detail === "string"
-          ? detail
-          : err.message ||
-            "An unexpected error occurred. Please try again."
-      );
-
-    } finally {
-      setLoading(false);
-    }
+  const go = (page, arg) => {
+    window.location.hash = arg ? `/${page}/${arg}` : `/${page}`;
   };
 
+  // The driver app is a full-screen phone layout.
+  if (route.page === "driver") {
+    return <DriverView driverId={route.arg} day={day} go={go} />;
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50">
-
-      {/* ============================================================
-          HEADER
-          ============================================================ */}
-
-      <header className="bg-blue-600 text-white shadow-lg sticky top-0 z-10">
-
-        <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
-
-          <span
-            className="text-3xl"
-            aria-hidden="true"
-          >
-            🚚
-          </span>
-
-          <div>
-
-            <h1 className="text-xl font-bold leading-tight tracking-tight">
-              SmartRoute
-            </h1>
-
-            <p className="text-blue-200 text-xs mt-0.5">
-              Intelligent Delivery Optimization
-            </p>
-
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <header className="sticky top-0 z-[1100] border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-xl" aria-hidden="true">
+              🚚
+            </div>
+            <div>
+              <h1 className="text-base font-bold leading-tight">SmartRoute</h1>
+              <p className="text-[11px] font-medium text-slate-500">Delivery dispatch · Tunisia</p>
+            </div>
           </div>
 
-        </div>
+          <nav className="order-3 -mx-1 flex w-full gap-1 overflow-x-auto sm:order-none sm:w-auto">
+            {TABS.map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => go(key)}
+                className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold transition ${
+                  route.page === key ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
 
+          {route.page !== "planner" && route.page !== "analytics" && (
+            <label className="ml-auto flex items-center gap-2 text-xs font-semibold text-slate-500">
+              Delivery day
+              <input
+                type="date"
+                value={day}
+                onChange={(e) => e.target.value && setDay(e.target.value)}
+                className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-slate-800"
+              />
+            </label>
+          )}
+        </div>
       </header>
 
-
-      {/* ============================================================
-          MAIN CONTENT
-          ============================================================ */}
-
-      <main className="max-w-2xl mx-auto px-4 pb-16">
-
-        {/* Delivery input form */}
-        <AddressForm
-          onSubmit={handleOptimize}
-          loading={loading}
-        />
-
-
-        {/* Error message */}
-        {error && (
-
-          <div
-            role="alert"
-            className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl"
-          >
-
-            <p className="text-red-800 font-semibold text-sm">
-              Optimisation failed
-            </p>
-
-            <pre
-              className="text-red-700 text-sm mt-1
-                whitespace-pre-wrap font-sans"
-            >
-              {error}
-            </pre>
-
-          </div>
-
-        )}
-
-
-        {/* Optimised route */}
-        {route && (
-
-          <div id="results-section">
-
-            <RouteDisplay
-              route={route}
-            />
-
-          </div>
-
-        )}
-
+      <main className="mx-auto max-w-6xl px-4 pb-16 pt-6 sm:px-6 lg:px-8">
+        {route.page === "import" && <ImportView day={day} go={go} />}
+        {route.page === "dispatch" && <DispatchView day={day} go={go} />}
+        {route.page === "analytics" && <AnalyticsView />}
+        {route.page === "planner" && <QuickPlanner />}
       </main>
 
-
-      {/* ============================================================
-          FOOTER
-          ============================================================ */}
-
-      <footer
-        className="text-center text-xs text-gray-400
-          py-4 border-t border-gray-200"
-      >
-        SmartRoute &nbsp;•&nbsp;
-        OR-Tools VRPTW &nbsp;•&nbsp;
-        FastAPI + React
+      <footer className="border-t border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-4 text-xs text-slate-400 sm:flex-row sm:justify-between sm:px-6 lg:px-8">
+          <p>SmartRoute · demo data is generated, not real customers</p>
+          <p>FastAPI · OR-Tools · SQLite · React · Leaflet</p>
+        </div>
       </footer>
-
     </div>
   );
 }

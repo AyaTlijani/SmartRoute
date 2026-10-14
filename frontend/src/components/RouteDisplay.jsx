@@ -4,27 +4,99 @@ import RouteMap from "./RouteMap";
 /**
  * RouteDisplay.jsx
  *
- * Displays the optimized delivery sequence returned by OR-Tools.
+ * Complete optimized-route results view.
  *
- * The frontend does NOT reorder the stops.
- * The order received from the backend is the optimized order.
- *
- * The map receives:
- *   - depot coordinates
- *   - optimized delivery coordinates
- *   - actual road geometry calculated by the Directions API
+ * Displays:
+ *   - Optimization status
+ *   - Real route statistics
+ *   - Actual road map
+ *   - Depot → delivery timeline
+ *   - ETA + time windows
+ *   - Google Maps navigation
  */
 
 const SLOT_STYLES = {
   1: {
-    badge: "bg-blue-100 text-blue-700",
+    badge: "bg-blue-50 text-blue-700 border-blue-100",
+    dot: "bg-blue-500",
     label: "Morning",
   },
   2: {
-    badge: "bg-orange-100 text-orange-700",
+    badge: "bg-orange-50 text-orange-700 border-orange-100",
+    dot: "bg-orange-500",
     label: "Afternoon",
   },
 };
+
+function StatCard({ label, value, detail, icon }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-slate-500">
+            {label}
+          </p>
+
+          <p className="mt-1 text-xl font-bold tracking-tight text-slate-900">
+            {value}
+          </p>
+
+          {detail && (
+            <p className="mt-0.5 text-xs text-slate-400">
+              {detail}
+            </p>
+          )}
+        </div>
+
+        <div
+          className="flex h-9 w-9 shrink-0 items-center justify-center
+            rounded-lg bg-slate-50 text-base"
+          aria-hidden="true"
+        >
+          {icon}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RouteConnector() {
+  return (
+    <div
+      className="ml-[17px] h-8 w-px bg-blue-200"
+      aria-hidden="true"
+    />
+  );
+}
+
+function formatMinutes(minutes) {
+  if (!Number.isFinite(minutes) || minutes < 0) {
+    return "—";
+  }
+
+  const rounded = Math.round(minutes);
+
+  if (rounded < 60) {
+    return `${rounded} min`;
+  }
+
+  const hours = Math.floor(rounded / 60);
+  const remaining = rounded % 60;
+
+  if (remaining === 0) {
+    return `${hours}h`;
+  }
+
+  return `${hours}h ${remaining}m`;
+}
+
+function formatDistance(distance) {
+  if (!Number.isFinite(distance) || distance < 0) {
+    return "—";
+  }
+
+  return `${distance.toFixed(2)} km`;
+}
 
 export default function RouteDisplay({ route }) {
   if (!route?.route?.length) {
@@ -37,113 +109,374 @@ export default function RouteDisplay({ route }) {
     depot_coordinates,
     route: stops,
     route_geometry,
+    metrics,
   } = route;
 
-  /*
-   * The backend gives every stop the same complete Google Maps URL.
-   * We only need to display it once.
-   */
   const fullRouteMapsUrl = stops[0]?.maps_url;
+
+  const hasRoadGeometry =
+    Array.isArray(route_geometry) &&
+    route_geometry.length > 1;
+
+  const totalDistance = Number(
+    metrics?.total_distance_km
+  );
+
+  const drivingMinutes = Number(
+    metrics?.total_driving_minutes
+  );
+
+  const serviceMinutes = Number(
+    metrics?.total_service_minutes
+  );
+
+  const totalRouteMinutes = Number(
+    metrics?.total_route_minutes
+  );
 
   return (
     <section
-      className="mt-6"
-      aria-label="Optimised delivery route"
+      className="space-y-5"
+      aria-label="Optimized delivery route"
     >
+
       {/* ============================================================
-          SUMMARY
+          SUCCESS HEADER
           ============================================================ */}
 
-      <div className="bg-green-50 border border-green-200 rounded-2xl p-4 mb-5">
-        <div className="flex items-start gap-3">
-          <span
-            className="text-2xl mt-0.5"
-            aria-hidden="true"
-          >
-            ✅
-          </span>
+      <div
+        className="overflow-hidden rounded-2xl border
+          border-emerald-200 bg-white"
+      >
+        <div
+          className="border-b border-emerald-100
+            bg-emerald-50 p-5"
+        >
+          <div className="flex items-start gap-3">
 
-          <div>
-            <h2 className="text-base font-bold text-green-800">
-              Route optimised — {total_stops}{" "}
-              {total_stops === 1 ? "stop" : "stops"}
-            </h2>
+            <div
+              className="flex h-10 w-10 shrink-0 items-center
+                justify-center rounded-full bg-emerald-100
+                text-lg text-emerald-700"
+              aria-hidden="true"
+            >
+              ✓
+            </div>
 
-            <p className="text-sm text-green-700 mt-1">
-              <span className="font-medium">
-                Starting from:
-              </span>{" "}
-              {depot_address}
-            </p>
+            <div className="min-w-0">
 
-            <p className="text-xs text-green-600 mt-1">
-              OR-Tools selected the delivery sequence while
-              respecting the requested time windows.
-            </p>
+              <div className="flex flex-wrap items-center gap-2">
+
+                <h3 className="text-base font-bold text-emerald-900">
+                  Route successfully optimized
+                </h3>
+
+                <span
+                  className="rounded-full bg-emerald-100 px-2
+                    py-0.5 text-[10px] font-bold uppercase
+                    tracking-wide text-emerald-700"
+                >
+                  Feasible
+                </span>
+
+              </div>
+
+              <p className="mt-1 text-sm leading-5 text-emerald-700">
+                SmartRoute found a delivery sequence that respects
+                the requested time windows.
+              </p>
+
+            </div>
+
           </div>
+        </div>
+
+        <div className="p-5">
+
+          <div className="flex items-start gap-3">
+
+            <div
+              className="flex h-9 w-9 shrink-0 items-center
+                justify-center rounded-lg bg-slate-900
+                text-sm font-bold text-white"
+              aria-hidden="true"
+            >
+              D
+            </div>
+
+            <div className="min-w-0">
+
+              <p
+                className="text-xs font-bold uppercase
+                  tracking-wide text-slate-400"
+              >
+                Starting point
+              </p>
+
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                {depot_address}
+              </p>
+
+            </div>
+
+          </div>
+
         </div>
       </div>
 
-      {/* ============================================================
-          INTERACTIVE ROAD MAP
-          ============================================================ */}
-
-      <RouteMap
-        depot={{
-          address: depot_address,
-          coordinates: depot_coordinates,
-        }}
-        stops={stops}
-        routeGeometry={route_geometry}
-      />
 
       {/* ============================================================
-          OPTIMISED ROUTE
+          REAL ROUTE STATISTICS
           ============================================================ */}
 
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-5">
-        <h3 className="text-sm font-bold text-gray-800 mb-4">
-          Optimised Route
-        </h3>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
 
-        <div className="space-y-0">
+        <StatCard
+          label="Distance"
+          value={formatDistance(totalDistance)}
+          detail="Actual driving route"
+          icon="↔"
+        />
+
+        <StatCard
+          label="Driving time"
+          value={formatMinutes(drivingMinutes)}
+          detail="Estimated road time"
+          icon="🚗"
+        />
+
+        <StatCard
+          label="Route time"
+          value={formatMinutes(totalRouteMinutes)}
+          detail={
+            Number.isFinite(serviceMinutes)
+              ? `${formatMinutes(serviceMinutes)} service`
+              : "Driving + service"
+          }
+          icon="◷"
+        />
+
+        <StatCard
+          label="Deliveries"
+          value={total_stops}
+          detail={
+            total_stops === 1
+              ? "delivery stop"
+              : "delivery stops"
+          }
+          icon="📦"
+        />
+
+      </div>
+
+
+      {/* ============================================================
+          ROUTE BREAKDOWN
+          ============================================================ */}
+
+      <div
+        className="rounded-2xl border border-slate-200
+          bg-white p-5"
+      >
+
+        <div className="mb-4">
+
+          <h3 className="text-base font-bold text-slate-900">
+            Route summary
+          </h3>
+
+          <p className="mt-0.5 text-xs text-slate-500">
+            Metrics calculated from the final optimized road route.
+          </p>
+
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+
+          <div
+            className="rounded-xl bg-slate-50 p-4"
+          >
+            <p
+              className="text-[10px] font-bold uppercase
+                tracking-wide text-slate-400"
+            >
+              Distance
+            </p>
+
+            <p className="mt-1 text-lg font-bold text-slate-900">
+              {formatDistance(totalDistance)}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Depot to final delivery
+            </p>
+          </div>
+
+          <div
+            className="rounded-xl bg-slate-50 p-4"
+          >
+            <p
+              className="text-[10px] font-bold uppercase
+                tracking-wide text-slate-400"
+            >
+              Driving
+            </p>
+
+            <p className="mt-1 text-lg font-bold text-slate-900">
+              {formatMinutes(drivingMinutes)}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Estimated road travel
+            </p>
+          </div>
+
+          <div
+            className="rounded-xl bg-slate-50 p-4"
+          >
+            <p
+              className="text-[10px] font-bold uppercase
+                tracking-wide text-slate-400"
+            >
+              Service
+            </p>
+
+            <p className="mt-1 text-lg font-bold text-slate-900">
+              {formatMinutes(serviceMinutes)}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-500">
+              {total_stops} × 10 min delivery service
+            </p>
+          </div>
+
+        </div>
+
+      </div>
+
+
+      {/* ============================================================
+          MAP
+          ============================================================ */}
+
+      <div>
+
+        <div className="mb-3 flex items-end justify-between gap-3">
+
+          <div>
+
+            <h3 className="text-base font-bold text-slate-900">
+              Route map
+            </h3>
+
+            <p className="mt-0.5 text-xs text-slate-500">
+              Follow the optimized sequence from the depot to the
+              final delivery.
+            </p>
+
+          </div>
+
+          <span
+            className="hidden rounded-full bg-slate-100 px-2.5 py-1
+              text-[10px] font-semibold text-slate-500 sm:block"
+          >
+            {hasRoadGeometry
+              ? "Driving route"
+              : "Location overview"}
+          </span>
+
+        </div>
+
+        <RouteMap
+          depot={{
+            address: depot_address,
+            coordinates: depot_coordinates,
+          }}
+          stops={stops}
+          routeGeometry={route_geometry}
+        />
+
+      </div>
+
+
+      {/* ============================================================
+          DELIVERY TIMELINE
+          ============================================================ */}
+
+      <div
+        className="rounded-2xl border border-slate-200
+          bg-white p-5"
+      >
+
+        <div className="mb-5 flex items-end justify-between gap-3">
+
+          <div>
+
+            <h3 className="text-base font-bold text-slate-900">
+              Optimized delivery sequence
+            </h3>
+
+            <p className="mt-0.5 text-xs text-slate-500">
+              OR-Tools selected this order while respecting
+              the delivery time windows.
+            </p>
+
+          </div>
+
+          <span className="text-xs font-medium text-slate-400">
+            {total_stops}{" "}
+            {total_stops === 1 ? "stop" : "stops"}
+          </span>
+
+        </div>
+
+
+        <div>
+
           {/* --------------------------------------------------------
               DEPOT
               -------------------------------------------------------- */}
 
           <div className="flex items-start gap-3">
-            <div className="flex flex-col items-center">
-              <div
-                className="w-9 h-9 rounded-full bg-gray-800
-                  text-white flex items-center justify-center text-sm"
-              >
-                📍
-              </div>
 
-              {stops.length > 0 && (
-                <div className="w-0.5 h-8 bg-gray-200" />
-              )}
+            <div
+              className="flex h-9 w-9 shrink-0 items-center
+                justify-center rounded-full bg-slate-900
+                text-xs font-bold text-white"
+            >
+              D
             </div>
 
-            <div className="pt-1 min-w-0">
-              <p className="text-xs font-semibold text-gray-500">
-                DEPOT
+            <div className="min-w-0 flex-1 pt-0.5">
+
+              <p
+                className="text-[10px] font-bold uppercase
+                  tracking-wide text-slate-400"
+              >
+                Start
               </p>
 
               <p
-                className="text-sm font-semibold text-gray-900"
-                title={depot_address}
+                className="mt-1 text-sm font-semibold
+                  leading-5 text-slate-900"
               >
                 {depot_address}
               </p>
+
             </div>
+
           </div>
 
+
+          <RouteConnector />
+
+
           {/* --------------------------------------------------------
-              OPTIMISED DELIVERY SEQUENCE
+              DELIVERIES
               -------------------------------------------------------- */}
 
           {stops.map((stop, index) => {
+
             const style =
               SLOT_STYLES[stop.slot] ?? SLOT_STYLES[1];
 
@@ -151,137 +484,207 @@ export default function RouteDisplay({ route }) {
               index === stops.length - 1;
 
             return (
-              <div
-                key={stop.stop_number}
-                className="flex items-start gap-3"
-              >
-                {/* Route number + connector */}
+              <React.Fragment key={stop.stop_number}>
 
-                <div className="flex flex-col items-center">
+                <div className="flex items-start gap-3">
+
                   <div
-                    className="w-9 h-9 rounded-full bg-blue-600
-                      text-white flex items-center justify-center
-                      text-sm font-bold"
+                    className="flex h-9 w-9 shrink-0 items-center
+                      justify-center rounded-full bg-blue-600
+                      text-xs font-bold text-white shadow-sm"
                   >
                     {stop.stop_number}
                   </div>
 
-                  {!isLast && (
-                    <div className="w-0.5 h-8 bg-gray-200" />
-                  )}
-                </div>
+                  <div className="min-w-0 flex-1">
 
-                {/* Stop information */}
-
-                <div className="pt-1 pb-4 min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-gray-500">
-                    DELIVERY {stop.stop_number}
-                  </p>
-
-                  <p
-                    className="text-sm font-semibold text-gray-900
-                      leading-snug"
-                    title={stop.address}
-                  >
-                    {stop.address}
-                  </p>
-
-                  {/* ETA + time window */}
-
-                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                    <span
-                      className="inline-flex items-center gap-1
-                        text-xs font-bold text-blue-700
-                        bg-blue-50 rounded-full px-2 py-0.5"
+                    <div
+                      className="flex flex-wrap items-start
+                        justify-between gap-2"
                     >
-                      <svg
-                        className="w-3 h-3"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={2.5}
-                        viewBox="0 0 24 24"
-                        aria-hidden="true"
+
+                      <div className="min-w-0">
+
+                        <p
+                          className="text-[10px] font-bold
+                            uppercase tracking-wide text-blue-600"
+                        >
+                          Delivery {stop.stop_number}
+                        </p>
+
+                        <p
+                          className="mt-1 text-sm font-semibold
+                            leading-5 text-slate-900"
+                          title={stop.address}
+                        >
+                          {stop.address}
+                        </p>
+
+                      </div>
+
+
+                      <div
+                        className="shrink-0 rounded-lg bg-blue-50
+                          px-2.5 py-1.5 text-right"
                       >
-                        <circle
-                          cx="12"
-                          cy="12"
-                          r="10"
+
+                        <p
+                          className="text-[9px] font-bold uppercase
+                            tracking-wide text-blue-500"
+                        >
+                          ETA
+                        </p>
+
+                        <p className="text-sm font-bold text-blue-700">
+                          {stop.arrival_time}
+                        </p>
+
+                      </div>
+
+                    </div>
+
+
+                    <div className="mt-2 flex flex-wrap gap-2">
+
+                      <span
+                        className={`inline-flex items-center gap-1.5
+                          rounded-full border px-2.5 py-1 text-[10px]
+                          font-semibold ${style.badge}`}
+                      >
+
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${style.dot}`}
+                          aria-hidden="true"
                         />
 
-                        <path
-                          strokeLinecap="round"
-                          d="M12 6v6l4 2"
-                        />
-                      </svg>
+                        {style.label}
 
-                      ETA {stop.arrival_time}
-                    </span>
+                      </span>
 
-                    <span
-                      className="text-xs text-gray-400"
-                      aria-hidden="true"
-                    >
-                      •
-                    </span>
 
-                    <span
-                      className={`text-xs font-semibold
-                        rounded-full px-2 py-0.5 ${style.badge}`}
-                    >
-                      {style.label} · {stop.time_window}
-                    </span>
+                      <span
+                        className="rounded-full border border-slate-100
+                          bg-slate-50 px-2.5 py-1 text-[10px]
+                          font-medium text-slate-500"
+                      >
+                        {stop.time_window}
+                      </span>
+
+                    </div>
+
                   </div>
+
                 </div>
-              </div>
+
+                {!isLast && <RouteConnector />}
+
+              </React.Fragment>
             );
           })}
+
         </div>
 
-        {/* ========================================================
-            GOOGLE MAPS — COMPLETE OPTIMISED ROUTE
-            ======================================================== */}
-
-        {fullRouteMapsUrl && (
-          <a
-            href={fullRouteMapsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="Open the complete optimised route in Google Maps"
-            className="mt-2 w-full inline-flex items-center
-              justify-center gap-2 bg-green-500
-              hover:bg-green-600 active:scale-95
-              text-white font-bold text-sm px-4 py-3
-              rounded-xl transition-all duration-150 shadow-sm"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="currentColor"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <path
-                d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13
-                7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0
-                9.5c-1.38 0-2.5-1.12-2.5-2.5S10.62
-                6.5 12 6.5 14.5 7.62 14.5 9 13.38
-                11.5 12 11.5z"
-              />
-            </svg>
-
-            View Full Route in Google Maps →
-          </a>
-        )}
       </div>
 
+
       {/* ============================================================
-          FOOTER
+          NAVIGATION
           ============================================================ */}
 
-      <p className="text-center text-xs text-gray-400 mt-5">
-        Route computed by OR-Tools VRPTW &nbsp;•&nbsp;
-        Travel times and road geometry via OpenRouteService
-      </p>
+      {fullRouteMapsUrl && (
+
+        <div
+          className="rounded-2xl border border-slate-200
+            bg-slate-900 p-5"
+        >
+
+          <div
+            className="flex flex-col gap-4 sm:flex-row
+              sm:items-center sm:justify-between"
+          >
+
+            <div>
+
+              <p className="text-sm font-bold text-white">
+                Ready to drive?
+              </p>
+
+              <p className="mt-1 text-xs leading-5 text-slate-400">
+                Open the complete optimized sequence in Google Maps
+                for turn-by-turn navigation.
+              </p>
+
+            </div>
+
+
+            <a
+              href={fullRouteMapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex shrink-0 items-center
+                justify-center gap-2 rounded-xl bg-white
+                px-4 py-3 text-sm font-bold text-slate-900
+                transition hover:bg-slate-100
+                active:scale-[0.98]"
+            >
+
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15 3h6v6M10 14L21 3"
+                />
+
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M18 13v5a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h5"
+                />
+              </svg>
+
+              Open in Google Maps
+
+            </a>
+
+          </div>
+
+        </div>
+
+      )}
+
+
+      {/* ============================================================
+          TECHNICAL FOOTER
+          ============================================================ */}
+
+      <div
+        className="flex flex-wrap items-center justify-center
+          gap-x-2 gap-y-1 text-center text-[10px] text-slate-400"
+      >
+
+        <span>OR-Tools VRPTW</span>
+
+        <span aria-hidden="true">•</span>
+
+        <span>OpenRouteService</span>
+
+        <span aria-hidden="true">•</span>
+
+        <span>FastAPI</span>
+
+        <span aria-hidden="true">•</span>
+
+        <span>React + Leaflet</span>
+
+      </div>
+
     </section>
   );
 }
-

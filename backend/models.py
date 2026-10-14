@@ -9,9 +9,11 @@ The API separates:
     Route data
         → optimized sequence + actual road geometry
 
-The road geometry is calculated AFTER OR-Tools selects the
-optimized sequence. This allows the frontend to draw the
-real driving route rather than a straight line between stops.
+    Route metrics
+        → distance, driving duration, optimization summary
+
+The road geometry and route metrics are calculated AFTER
+OR-Tools selects the optimized sequence.
 """
 
 from typing import List
@@ -74,6 +76,8 @@ class OptimizeRouteRequest(BaseModel):
 
     deliveries: List[DeliveryStop] = Field(
         ...,
+        min_length=1,
+        max_length=20,
         description=(
             "List of delivery stops to route through "
             "(maximum 20)"
@@ -90,7 +94,8 @@ class OptimizedStop(BaseModel):
     """
     One stop in the optimized delivery sequence.
 
-    The order of these objects is the order selected by OR-Tools.
+    The order of these objects is the exact order selected
+    by OR-Tools.
     """
 
     stop_number: int = Field(
@@ -105,6 +110,8 @@ class OptimizedStop(BaseModel):
 
     coordinates: List[float] = Field(
         ...,
+        min_length=2,
+        max_length=2,
         description=(
             "Customer coordinates in "
             "[longitude, latitude] order."
@@ -123,6 +130,8 @@ class OptimizedStop(BaseModel):
 
     slot: int = Field(
         ...,
+        ge=1,
+        le=2,
         description="Original requested time-slot: 1 or 2.",
     )
 
@@ -136,6 +145,63 @@ class OptimizedStop(BaseModel):
 
 
 # ============================================================================
+# ROUTE METRICS
+# ============================================================================
+
+
+class RouteMetrics(BaseModel):
+    """
+    Real metrics for the optimized route.
+
+    These values describe the final route returned by
+    the Directions API after OR-Tools has selected
+    the delivery order.
+    """
+
+    total_distance_km: float = Field(
+        ...,
+        ge=0,
+        description=(
+            "Total driving distance of the optimized "
+            "route in kilometres."
+        ),
+    )
+
+    total_driving_minutes: int = Field(
+        ...,
+        ge=0,
+        description=(
+            "Total estimated driving time of the optimized "
+            "route in minutes, excluding delivery service time."
+        ),
+    )
+
+    total_service_minutes: int = Field(
+        ...,
+        ge=0,
+        description=(
+            "Total delivery service time. "
+            "Currently 10 minutes per delivery."
+        ),
+    )
+
+    total_route_minutes: int = Field(
+        ...,
+        ge=0,
+        description=(
+            "Total route duration including driving and "
+            "delivery service time."
+        ),
+    )
+
+    delivery_count: int = Field(
+        ...,
+        ge=0,
+        description="Number of deliveries in the route.",
+    )
+
+
+# ============================================================================
 # COMPLETE ROUTE RESPONSE
 # ============================================================================
 
@@ -144,20 +210,28 @@ class OptimizeRouteResponse(BaseModel):
     """
     Complete response returned by POST /optimize-route.
 
-    Important architecture:
+    Pipeline:
 
-        route
-            → optimized stops selected by OR-Tools
-
-        route_geometry
-            → actual road geometry calculated by the
-              Directions API AFTER optimization
+        Addresses
+            ↓
+        Geocoding
+            ↓
+        Travel-time matrix
+            ↓
+        OR-Tools VRPTW
+            ↓
+        Optimized delivery sequence
+            ↓
+        Directions API
+            ↓
+        Actual road geometry + route metrics
+            ↓
+        Frontend visualization
 
     Coordinates use:
 
         [longitude, latitude]
 
-    This is the format used by GeoJSON / ORS.
     The React Leaflet frontend converts them to:
 
         [latitude, longitude]
@@ -170,6 +244,7 @@ class OptimizeRouteResponse(BaseModel):
 
     total_stops: int = Field(
         ...,
+        ge=0,
         description="Number of delivery stops.",
     )
 
@@ -180,6 +255,8 @@ class OptimizeRouteResponse(BaseModel):
 
     depot_coordinates: List[float] = Field(
         ...,
+        min_length=2,
+        max_length=2,
         description=(
             "Depot coordinates in "
             "[longitude, latitude] order."
@@ -203,3 +280,10 @@ class OptimizeRouteResponse(BaseModel):
         ),
     )
 
+    metrics: RouteMetrics = Field(
+        ...,
+        description=(
+            "Real distance and duration metrics "
+            "for the final optimized route."
+        ),
+    )

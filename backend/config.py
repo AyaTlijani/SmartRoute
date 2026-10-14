@@ -24,12 +24,8 @@ load_dotenv()
 
 ORS_API_KEY: str = os.getenv("ORS_API_KEY", "")
 
-if not ORS_API_KEY:
-    raise EnvironmentError(
-        "\n\n[config] ORS_API_KEY is not set.\n"
-        "Steps to fix:\n"
-        "  1. Sign up at https://openrouteservice.org/ (free tier available)\n"
-        "  2. Copy your API key from the dashboard\n"
-        "  3. Copy .env.example → .env and paste the key\n"
-        "  4. Restart the server.\n"
-    )
+# The key is optional. Without it, SmartRoute estimates driving times from
+# straight-line distance and draws straight segments between stops, so the
+# app (dispatch, driver view, analytics) works fully offline for demos.
+# The original address-based /optimize-route endpoint still needs the key.
+USE_ORS: bool = bool(ORS_API_KEY)

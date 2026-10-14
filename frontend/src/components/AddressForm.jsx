@@ -1,330 +1,573 @@
 /**
- * AddressForm.jsx — Delivery stop input form.
+ * AddressForm.jsx — SmartRoute route planning workspace.
  *
- * Why this file exists:
- *   Encapsulates all user-input logic for building a route optimisation
- *   request.  The parent (App.jsx) only needs to provide an `onSubmit`
- *   callback; it never sees the internal editing state.
- *
- * What it renders:
- *   1. Depot / start address — a single text input at the top.
- *   2. Delivery stops list   — dynamic rows, each with:
- *        • A free-text address input
- *        • A slot selector (Slot 1 = 9am–12pm, Slot 2 = 1pm–5pm)
- *        • A remove button (hidden when only one stop remains)
- *   3. "Add Stop" button — appends a new blank row (max 20).
- *   4. "Optimise Route" submit button — validates then calls props.onSubmit.
- *
- * Props:
- *   onSubmit  {Function}  Called with { depot_address, deliveries } on valid submit.
- *   loading   {boolean}   When true, the submit button is disabled and shows a
- *                          spinner/label so the driver knows a request is in flight.
- *
- * Internal state:
- *   depotAddress  {string}       — controlled value of the depot input.
- *   stops         {Array<Stop>}  — list of delivery stop objects.
- *   errors        {Object}       — keyed validation errors ('depot', 'stop_0', …).
- *
- * Stop shape:
- *   { id: number, address: string, slot: 1|2 }
- *   id is a timestamp, used as the React key so re-ordering rows doesn't
- *   cause input focus to jump.
+ * Handles:
+ *   - Depot / starting point
+ *   - Dynamic delivery stops
+ *   - Delivery time windows
+ *   - Add / remove stops
+ *   - Client-side validation
+ *   - Route optimization submission
  */
 
 import React, { useState } from "react";
 
-/** Generates a fresh blank stop with a unique id. */
-const newStop = () => ({ id: Date.now() + Math.random(), address: "", slot: 1 });
+const MAX_STOPS = 20;
+
+const newStop = () => ({
+  id: `${Date.now()}-${Math.random()}`,
+  address: "",
+  slot: 1,
+});
 
 export default function AddressForm({ onSubmit, loading }) {
   const [depotAddress, setDepotAddress] = useState("");
-  const [stops, setStops]               = useState([newStop()]);
-  const [errors, setErrors]             = useState({});
+  const [stops, setStops] = useState([newStop()]);
+  const [errors, setErrors] = useState({});
 
-  // ─── Stop list mutation helpers ────────────────────────────────────────
-
-  /**
-   * addStop
-   *
-   * Appends a blank delivery stop to the list.
-   * Capped at 20 to match the backend's Distance Matrix API limit.
-   */
   const addStop = () => {
-    if (stops.length >= 20) return;
+    if (stops.length >= MAX_STOPS || loading) {
+      return;
+    }
+
     setStops((prev) => [...prev, newStop()]);
   };
 
-  /**
-   * removeStop
-   *
-   * Removes the stop with the given id from the list.
-   * Refuses to remove the last remaining stop so the form is never empty.
-   *
-   * @param {number} id — the stop's unique id
-   */
   const removeStop = (id) => {
-    if (stops.length <= 1) return;
-    setStops((prev) => prev.filter((s) => s.id !== id));
-    // Clear any error for removed stop (find its index by id for cleanup)
+    if (stops.length <= 1 || loading) {
+      return;
+    }
+
+    setStops((prev) => prev.filter((stop) => stop.id !== id));
+
     setErrors((prev) => {
-      const updated = { ...prev };
-      // We don't know the old index here, so re-validate on next submit.
-      return updated;
+      const next = { ...prev };
+
+      Object.keys(next).forEach((key) => {
+        if (key.startsWith("stop_")) {
+          delete next[key];
+        }
+      });
+
+      return next;
     });
   };
 
-  /**
-   * updateStop
-   *
-   * Immutably updates a single field on the stop with the given id.
-   *
-   * @param {number} id     — target stop id
-   * @param {string} field  — 'address' | 'slot'
-   * @param {*}      value  — new value for that field
-   */
   const updateStop = (id, field, value) => {
     setStops((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, [field]: value } : s))
+      prev.map((stop) =>
+        stop.id === id
+          ? {
+              ...stop,
+              [field]: value,
+            }
+          : stop
+      )
     );
+
+    setErrors((prev) => {
+      const next = { ...prev };
+
+      if (field === "address") {
+        Object.keys(next).forEach((key) => {
+          if (key.startsWith("stop_")) {
+            delete next[key];
+          }
+        });
+      }
+
+      return next;
+    });
   };
 
-  // ─── Validation ────────────────────────────────────────────────────────
-
-  /**
-   * validate
-   *
-   * Checks that every required field is filled in.  Returns an errors object
-   * keyed by field name; an empty object means the form is valid.
-   *
-   * @returns {Object} errors — e.g. { depot: 'Required', stop_0: 'Required' }
-   */
   const validate = () => {
-    const errs = {};
+    const nextErrors = {};
 
     if (!depotAddress.trim()) {
-      errs.depot = "Depot address is required.";
+      nextErrors.depot =
+        "Enter the address where the route starts.";
     }
 
-    stops.forEach((stop, idx) => {
+    stops.forEach((stop, index) => {
       if (!stop.address.trim()) {
-        errs[`stop_${idx}`] = "Address is required.";
+        nextErrors[`stop_${index}`] =
+          "Enter a delivery address.";
       }
     });
 
-    return errs;
+    return nextErrors;
   };
 
-  // ─── Form submission ────────────────────────────────────────────────────
+  const handleSubmit = (event) => {
+    event.preventDefault();
 
-  /**
-   * handleSubmit
-   *
-   * Validates the form, then calls props.onSubmit with the cleaned data.
-   * Prevents the default browser form submission (page reload).
-   *
-   * @param {React.FormEvent} e
-   */
-  const handleSubmit = (e) => {
-    e.preventDefault();
+    if (loading) {
+      return;
+    }
 
-    const errs = validate();
-    if (Object.keys(errs).length > 0) {
-      setErrors(errs);
-      // Scroll to the first error so it's visible on mobile.
-      const firstErrKey = Object.keys(errs)[0];
-      const el = document.getElementById(`field-${firstErrKey}`);
-      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const validationErrors = validate();
+
+    if (Object.keys(validationErrors).length > 0) {
+      setErrors(validationErrors);
+
+      const firstError = Object.keys(validationErrors)[0];
+
+      document
+        .getElementById(`field-${firstError}`)
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+
       return;
     }
 
     setErrors({});
+
     onSubmit({
       depot_address: depotAddress.trim(),
-      deliveries: stops.map((s) => ({
-        address: s.address.trim(),
-        slot:    s.slot,
+      deliveries: stops.map((stop) => ({
+        address: stop.address.trim(),
+        slot: stop.slot,
       })),
     });
   };
 
-  // ─── Render ────────────────────────────────────────────────────────────
-
   return (
     <form
       onSubmit={handleSubmit}
-      noValidate              /* we handle validation ourselves */
-      className="bg-white rounded-2xl shadow-md p-5 mt-4"
+      noValidate
+      className="space-y-7"
     >
-      <h2 className="text-lg font-bold text-gray-800 mb-5">Plan Your Deliveries</h2>
 
-      {/* ── Depot Address ─────────────────────────────────────────────── */}
-      <div className="mb-6" id="field-depot">
+      {/* ============================================================
+          DEPOT / START
+          ============================================================ */}
+
+      <div>
+
+        <div className="mb-3 flex items-start gap-3">
+
+          <div
+            className="flex h-9 w-9 shrink-0 items-center
+              justify-center rounded-lg bg-slate-900 text-white
+              text-sm font-bold"
+            aria-hidden="true"
+          >
+            D
+          </div>
+
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">
+              Starting point
+            </h3>
+
+            <p className="mt-0.5 text-xs text-slate-500">
+              Where the vehicle begins its route.
+            </p>
+          </div>
+
+        </div>
+
         <label
           htmlFor="depot-input"
-          className="block text-sm font-semibold text-gray-700 mb-1"
+          className="mb-1.5 block text-xs font-semibold
+            text-slate-600"
         >
-          Depot / Start Address
+          Depot / warehouse address
         </label>
+
         <input
           id="depot-input"
           type="text"
           value={depotAddress}
-          onChange={(e) => setDepotAddress(e.target.value)}
-          placeholder="e.g. 10 Downing Street, London, UK"
+          onChange={(event) => {
+            setDepotAddress(event.target.value);
+
+            if (errors.depot) {
+              setErrors((prev) => {
+                const next = { ...prev };
+                delete next.depot;
+                return next;
+              });
+            }
+          }}
+          placeholder="e.g. Avenue de la Liberté, Monastir, Tunisia"
           autoComplete="street-address"
-          className={`w-full border rounded-xl px-4 py-3 text-base
-            focus:outline-none focus:ring-2 focus:ring-blue-500
-            ${errors.depot ? "border-red-400 bg-red-50" : "border-gray-300"}`}
+          disabled={loading}
+          className={`w-full rounded-xl border px-4 py-3
+            text-base text-slate-900 outline-none transition
+            placeholder:text-slate-400
+            focus:ring-2 focus:ring-blue-500
+            disabled:cursor-not-allowed disabled:bg-slate-50
+            ${
+              errors.depot
+                ? "border-red-400 bg-red-50"
+                : "border-slate-200 bg-white"
+            }`}
         />
+
         {errors.depot && (
-          <p className="text-red-500 text-xs mt-1" role="alert">
+          <p
+            id="field-depot-error"
+            className="mt-1.5 text-xs font-medium text-red-600"
+            role="alert"
+          >
             {errors.depot}
           </p>
         )}
-        <p className="text-gray-400 text-xs mt-1">
-          Where the driver starts — warehouse, office, etc.
-        </p>
+
       </div>
 
-      {/* ── Delivery Stops ────────────────────────────────────────────── */}
-      <div className="mb-5">
-        {/* Header row */}
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-semibold text-gray-700">
-            Delivery Stops
-            <span className="ml-1 text-gray-400 font-normal">
-              ({stops.length}/20)
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={addStop}
-            disabled={stops.length >= 20}
-            className="text-sm text-blue-600 font-semibold disabled:text-gray-400
-              disabled:cursor-not-allowed hover:text-blue-800 transition-colors"
-          >
-            + Add Stop
-          </button>
-        </div>
 
-        {/* Stop rows */}
-        <div className="space-y-3">
-          {stops.map((stop, idx) => (
+      {/* ============================================================
+          DELIVERY STOPS
+          ============================================================ */}
+
+      <div>
+
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row
+          sm:items-end sm:justify-between">
+
+          <div className="flex items-start gap-3">
+
             <div
-              key={stop.id}
-              id={`field-stop_${idx}`}
-              className="flex gap-2 items-start"
+              className="flex h-9 w-9 shrink-0 items-center
+                justify-center rounded-lg bg-blue-600 text-white
+                text-sm font-bold"
+              aria-hidden="true"
             >
-              {/* Stop number badge */}
-              <span className="flex-shrink-0 w-7 h-10 flex items-center justify-center
-                text-sm font-bold text-gray-400 pt-1">
-                {idx + 1}
-              </span>
-
-              {/* Address input */}
-              <div className="flex-1 min-w-0">
-                <input
-                  type="text"
-                  value={stop.address}
-                  onChange={(e) => updateStop(stop.id, "address", e.target.value)}
-                  placeholder={`Customer address ${idx + 1}`}
-                  autoComplete="off"
-                  className={`w-full border rounded-xl px-3 py-2.5 text-base
-                    focus:outline-none focus:ring-2 focus:ring-blue-500
-                    ${errors[`stop_${idx}`]
-                      ? "border-red-400 bg-red-50"
-                      : "border-gray-300"
-                    }`}
-                />
-                {errors[`stop_${idx}`] && (
-                  <p className="text-red-500 text-xs mt-1" role="alert">
-                    {errors[`stop_${idx}`]}
-                  </p>
-                )}
-              </div>
-
-              {/* Slot selector */}
-              <select
-                value={stop.slot}
-                onChange={(e) => updateStop(stop.id, "slot", Number(e.target.value))}
-                aria-label={`Time slot for stop ${idx + 1}`}
-                className="flex-shrink-0 border border-gray-300 rounded-xl px-2
-                  py-2.5 text-sm bg-white
-                  focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value={1}>Slot 1 · 9am–12pm</option>
-                <option value={2}>Slot 2 · 1pm–5pm</option>
-              </select>
-
-              {/* Remove button — hidden when there's only one stop */}
-              {stops.length > 1 ? (
-                <button
-                  type="button"
-                  onClick={() => removeStop(stop.id)}
-                  aria-label={`Remove stop ${idx + 1}`}
-                  className="flex-shrink-0 w-9 h-10 flex items-center justify-center
-                    text-gray-400 hover:text-red-500 transition-colors rounded-lg
-                    hover:bg-red-50"
-                >
-                  ✕
-                </button>
-              ) : (
-                /* Invisible spacer so layout stays consistent */
-                <div className="flex-shrink-0 w-9" aria-hidden="true" />
-              )}
+              1
             </div>
-          ))}
+
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                Delivery stops
+              </h3>
+
+              <p className="mt-0.5 text-xs text-slate-500">
+                Add each customer and their preferred delivery window.
+              </p>
+            </div>
+
+          </div>
+
+          <span className="text-xs font-medium text-slate-400">
+            {stops.length} / {MAX_STOPS} stops
+          </span>
+
         </div>
+
+
+        {/* Stop list */}
+
+        <div className="space-y-3">
+
+          {stops.map((stop, index) => {
+
+            const addressError =
+              errors[`stop_${index}`];
+
+            return (
+              <div
+                key={stop.id}
+                id={`field-stop_${index}`}
+                className={`rounded-xl border p-3 transition
+                  ${
+                    addressError
+                      ? "border-red-200 bg-red-50/50"
+                      : "border-slate-200 bg-slate-50/60"
+                  }`}
+              >
+
+                <div className="flex gap-3">
+
+                  {/* Number */}
+
+                  <div
+                    className="flex h-9 w-9 shrink-0 items-center
+                      justify-center rounded-full bg-blue-600
+                      text-sm font-bold text-white"
+                    aria-label={`Delivery ${index + 1}`}
+                  >
+                    {index + 1}
+                  </div>
+
+
+                  {/* Fields */}
+
+                  <div className="min-w-0 flex-1 space-y-2.5">
+
+                    <div>
+
+                      <label
+                        htmlFor={`address-${stop.id}`}
+                        className="sr-only"
+                      >
+                        Address for delivery {index + 1}
+                      </label>
+
+                      <input
+                        id={`address-${stop.id}`}
+                        type="text"
+                        value={stop.address}
+                        onChange={(event) =>
+                          updateStop(
+                            stop.id,
+                            "address",
+                            event.target.value
+                          )
+                        }
+                        placeholder={`Customer address ${index + 1}`}
+                        autoComplete="off"
+                        disabled={loading}
+                        className={`w-full rounded-lg border
+                          bg-white px-3 py-2.5 text-sm
+                          text-slate-900 outline-none transition
+                          placeholder:text-slate-400
+                          focus:ring-2 focus:ring-blue-500
+                          disabled:cursor-not-allowed
+                          disabled:bg-slate-100
+                          ${
+                            addressError
+                              ? "border-red-400"
+                              : "border-slate-200"
+                          }`}
+                      />
+
+                      {addressError && (
+                        <p
+                          className="mt-1 text-xs font-medium
+                            text-red-600"
+                          role="alert"
+                        >
+                          {addressError}
+                        </p>
+                      )}
+
+                    </div>
+
+
+                    {/* Time window */}
+
+                    <div className="flex flex-col gap-2 sm:flex-row
+                      sm:items-center">
+
+                      <label
+                        htmlFor={`slot-${stop.id}`}
+                        className="text-xs font-semibold
+                          text-slate-500"
+                      >
+                        Delivery window
+                      </label>
+
+                      <select
+                        id={`slot-${stop.id}`}
+                        value={stop.slot}
+                        onChange={(event) =>
+                          updateStop(
+                            stop.id,
+                            "slot",
+                            Number(event.target.value)
+                          )
+                        }
+                        disabled={loading}
+                        className="rounded-lg border border-slate-200
+                          bg-white px-3 py-2 text-sm font-medium
+                          text-slate-700 outline-none
+                          focus:ring-2 focus:ring-blue-500
+                          disabled:cursor-not-allowed
+                          disabled:bg-slate-100"
+                      >
+                        <option value={1}>
+                          Morning · 9:00 AM – 12:00 PM
+                        </option>
+
+                        <option value={2}>
+                          Afternoon · 1:00 PM – 5:00 PM
+                        </option>
+                      </select>
+
+                    </div>
+
+                  </div>
+
+
+                  {/* Remove */}
+
+                  {stops.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeStop(stop.id)}
+                      disabled={loading}
+                      aria-label={`Remove delivery ${index + 1}`}
+                      title="Remove delivery"
+                      className="flex h-9 w-9 shrink-0 items-center
+                        justify-center rounded-lg text-slate-400
+                        transition hover:bg-red-50 hover:text-red-600
+                        disabled:cursor-not-allowed
+                        disabled:opacity-40"
+                    >
+                      <svg
+                        className="h-4 w-4"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        aria-hidden="true"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          d="M6 6l12 12M18 6L6 18"
+                        />
+                      </svg>
+                    </button>
+                  )}
+
+                </div>
+
+              </div>
+            );
+          })}
+
+        </div>
+
+
+        {/* Add stop */}
+
+        <button
+          type="button"
+          onClick={addStop}
+          disabled={stops.length >= MAX_STOPS || loading}
+          className="mt-3 inline-flex items-center gap-2
+            rounded-lg border border-dashed border-slate-300
+            px-3 py-2 text-sm font-semibold text-blue-600
+            transition hover:border-blue-300 hover:bg-blue-50
+            disabled:cursor-not-allowed disabled:text-slate-400
+            disabled:hover:border-slate-300
+            disabled:hover:bg-transparent"
+        >
+          <span className="text-base leading-none">
+            +
+          </span>
+
+          Add delivery
+
+        </button>
+
+        {stops.length >= MAX_STOPS && (
+          <p className="mt-2 text-xs text-slate-400">
+            Maximum of {MAX_STOPS} delivery stops reached.
+          </p>
+        )}
+
       </div>
 
-      {/* ── Slot legend ───────────────────────────────────────────────── */}
-      <div className="flex gap-4 mb-5 text-xs text-gray-500">
-        <span>
-          <span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-400 mr-1" />
-          Slot 1: 9:00 AM – 12:00 PM
-        </span>
-        <span>
-          <span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-400 mr-1" />
-          Slot 2: 1:00 PM – 5:00 PM
-        </span>
+
+      {/* ============================================================
+          TIME WINDOW LEGEND
+          ============================================================ */}
+
+      <div className="rounded-xl border border-slate-100
+        bg-slate-50 p-4">
+
+        <p className="mb-2 text-xs font-bold text-slate-600">
+          Delivery windows
+        </p>
+
+        <div className="flex flex-col gap-2 text-xs text-slate-500
+          sm:flex-row sm:gap-5">
+
+          <span className="flex items-center gap-2">
+
+            <span
+              className="h-2.5 w-2.5 rounded-full bg-blue-500"
+              aria-hidden="true"
+            />
+
+            Morning · 9:00 AM – 12:00 PM
+
+          </span>
+
+          <span className="flex items-center gap-2">
+
+            <span
+              className="h-2.5 w-2.5 rounded-full bg-orange-500"
+              aria-hidden="true"
+            />
+
+            Afternoon · 1:00 PM – 5:00 PM
+
+          </span>
+
+        </div>
+
       </div>
 
-      {/* ── Submit button ──────────────────────────────────────────────── */}
+
+      {/* ============================================================
+          OPTIMIZE
+          ============================================================ */}
+
       <button
         type="submit"
         disabled={loading}
-        className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold
-          text-base hover:bg-blue-700 active:scale-95
-          disabled:opacity-60 disabled:cursor-not-allowed
-          transition-all duration-150 shadow-sm"
+        className="flex w-full items-center justify-center gap-2
+          rounded-xl bg-blue-600 px-5 py-3.5 text-sm font-bold
+          text-white shadow-sm transition
+          hover:bg-blue-700
+          active:scale-[0.99]
+          disabled:cursor-not-allowed
+          disabled:opacity-60"
       >
+
         {loading ? (
-          <span className="flex items-center justify-center gap-2">
-            {/* Simple CSS spinner */}
+          <>
             <svg
-              className="animate-spin h-5 w-5 text-white"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
+              className="h-5 w-5 animate-spin"
               viewBox="0 0 24 24"
+              fill="none"
               aria-hidden="true"
             >
               <circle
                 className="opacity-25"
-                cx="12" cy="12" r="10"
-                stroke="currentColor" strokeWidth="4"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
               />
+
               <path
-                className="opacity-75"
+                className="opacity-90"
                 fill="currentColor"
                 d="M4 12a8 8 0 018-8v8H4z"
               />
             </svg>
-            Optimising route…
-          </span>
+
+            Optimizing route...
+
+          </>
         ) : (
-          "Optimise Route →"
+          <>
+            Optimize delivery route
+
+            <span
+              className="text-base"
+              aria-hidden="true"
+            >
+              →
+            </span>
+          </>
         )}
+
       </button>
+
+      <p className="text-center text-xs text-slate-400">
+        SmartRoute will calculate travel times and find a feasible
+        delivery sequence while respecting your time windows.
+      </p>
+
     </form>
   );
 }

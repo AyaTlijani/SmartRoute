@@ -25,6 +25,7 @@ export default defineConfig({
 
   server: {
     port: 5173,
+    host: true, // reachable from a phone on the same Wi-Fi
     proxy: {
       // Any request from React matching /api/* will be forwarded to FastAPI.
       "/api": {
