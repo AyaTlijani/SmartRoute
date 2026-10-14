@@ -130,7 +130,7 @@ def overview(day: str = None, _: CurrentUser = Depends(require_admin)):
         attention.append({"level": "warning", "title": f"{_n(len(pending), 'unassigned order')}",
                           "detail": "Run assignment, or assign them by hand.", "to": "/admin/dispatch"})
     if unscheduled:
-        attention.append({"level": "warning", "title": f"{_n(len(unscheduled), 'stop doesn\'t', 'stops don\'t')} fit a route",
+        attention.append({"level": "warning", "title": _n(len(unscheduled), "stop doesn't", "stops don't") + " fit a route",
                           "detail": "Their time window can't be met. Move them to another driver or day.",
                           "to": "/admin/dispatch"})
     if failed_open:

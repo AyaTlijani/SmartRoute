@@ -47,7 +47,10 @@ export function errorText(err) {
   const detail = err?.response?.data?.detail;
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) return detail.map((d) => `${d.loc?.at(-1) ?? ""}: ${d.msg}`).join(", ");
-  if (err?.code === "ERR_NETWORK") return "Can't reach the server. Is the backend running?";
+  const status = err?.response?.status;
+  if (err?.code === "ERR_NETWORK" || status === 502 || status === 503 && !detail || status === 504) {
+    return "Can't reach the backend. Start it with: uvicorn main:app --reload --port 8000 (in the backend folder), then try again.";
+  }
   return err?.message || "Something went wrong.";
 }
 
