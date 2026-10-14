@@ -31,6 +31,8 @@
 }
 
 .leaflet-container { font-family: inherit; background: #EEF3EF; }
+/* Calmer OpenStreetMap colours so the green route and markers stand out. */
+.leaflet-tile-pane { filter: saturate(0.45) brightness(1.06) contrast(0.92); }
 .leaflet-control-zoom { border: none !important; box-shadow: 0 6px 18px rgba(15,31,23,.12) !important; border-radius: 14px !important; overflow: hidden; }
 .leaflet-control-zoom a { width: 34px !important; height: 34px !important; line-height: 34px !important; color: #0F1F17 !important; }
 .leaflet-popup-content-wrapper { border-radius: 16px; box-shadow: 0 10px 30px rgba(15,31,23,.14); }

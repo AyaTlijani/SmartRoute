@@ -297,10 +297,10 @@ export default function RouteMap({
           zoomControl
           className={`${height} w-full`}
         >
+          {/* OpenStreetMap's own tiles: free, no key. Softened in index.css to suit the theme. */}
           <TileLayer
-            attribution='&copy; OpenStreetMap contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-            url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-            subdomains="abcd"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
             maxZoom={19}
           />
 
