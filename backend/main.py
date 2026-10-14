@@ -26,10 +26,14 @@ import urllib.parse
 import requests as http_requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi import Depends
 
+import analytics
+import auth
 import dispatch
+import drivers
 import sample_data
+from auth import require_admin
 from db import connect, init_db
 
 from models import (
@@ -81,13 +85,10 @@ app = FastAPI(
 # DISPATCH WORKFLOW (Excel import, drivers, routes, analytics)
 # ============================================================================
 
+app.include_router(auth.router)
 app.include_router(dispatch.router)
-
-app.mount(
-    "/photos",
-    StaticFiles(directory=dispatch.UPLOAD_DIR),
-    name="photos",
-)
+app.include_router(drivers.router)
+app.include_router(analytics.router)
 
 
 @app.on_event("startup")
@@ -98,6 +99,7 @@ def _startup() -> None:
         if conn.execute("SELECT COUNT(*) FROM drivers").fetchone()[0] == 0:
             logger.info("Empty database: loading demo data")
             sample_data.seed_demo(conn)
+        sample_data.ensure_accounts(conn)
 
 
 # ============================================================================
@@ -171,6 +173,7 @@ def health_check() -> dict:
 )
 def optimize_route(
     request: OptimizeRouteRequest,
+    _admin=Depends(require_admin),
 ) -> OptimizeRouteResponse:
 
     if not USE_ORS:

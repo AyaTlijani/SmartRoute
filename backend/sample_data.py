@@ -14,6 +14,7 @@ from datetime import date, timedelta
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
+from auth import hash_password
 from orders_import import TEMPLATE_HEADERS
 from tunisia import CITIES
 
@@ -44,7 +45,11 @@ PRODUCTS = ["Sneakers size 42", "Black hoodie L", "Phone case", "Perfume 100ml",
             "Leather handbag", "Kids dress", "Smart watch", "Hair dryer", "Makeup kit",
             "Bluetooth earbuds", "Abaya", "Kitchen set"]
 FAIL_REASONS = (["No answer"] * 8 + ["Customer refused"] * 5 + ["Not at home"] * 4
-                + ["Wrong address"] * 2 + ["Other"])
+                + ["Address not found"] * 2 + ["Other"])
+
+# Demo logins (shown on the login page; this is a local demo, not production).
+ADMIN_LOGIN = ("admin", "admin123", "Leila Haddad")
+DRIVER_PASSWORD = "driver123"
 
 # Where orders come from: Grand Tunis dominates, a few from far cities
 # that no driver covers (they show up as "unassigned").
@@ -95,7 +100,7 @@ def _make_order(rng, phone=None):
 
 def seed_demo(conn, days: int = 21) -> dict:
     """Wipe everything, add drivers and `days` days of finished deliveries."""
-    for table in ("attempts", "routes", "orders", "drivers"):
+    for table in ("sessions", "users", "attempts", "routes", "orders", "drivers"):
         conn.execute(f"DELETE FROM {table}")
     conn.execute("DELETE FROM sqlite_sequence")
 
@@ -107,20 +112,28 @@ def seed_demo(conn, days: int = 21) -> dict:
             (name, phone, vehicle, zones, dname, dlat, dlng),
         )
         driver_ids.append((cur.lastrowid, zones.split(","), name))
+        conn.execute("INSERT INTO users (username, password_hash, role, driver_id, full_name) "
+                     "VALUES (?, ?, 'driver', ?, ?)",
+                     (name.split()[0].lower(), hash_password(DRIVER_PASSWORD), cur.lastrowid, name))
+    conn.execute("INSERT INTO users (username, password_hash, role, full_name) VALUES (?, ?, 'admin', ?)",
+                 (ADMIN_LOGIN[0], hash_password(ADMIN_LOGIN[1]), ADMIN_LOGIN[2]))
 
     rng = random.Random(42)
     risky = _risky_phones()
     regulars = [_phone(rng) for _ in range(60)]
     today = date.today()
     count = 0
+    carry = []  # failed orders retried the next day: (original id, order dict)
 
     for back in range(days, 0, -1):
         day = today - timedelta(days=back)
         n = rng.randint(28, 46) + (8 if day.weekday() == 0 else 0)  # busier Mondays
-        for _ in range(n):
-            pick = rng.random()
-            phone = rng.choice(risky) if pick < 0.08 else rng.choice(regulars) if pick < 0.35 else None
-            o = _make_order(rng, phone)
+        todays, carry = [(None, None)] * n + carry, []
+        for retry_of, o in todays:
+            if o is None:
+                pick = rng.random()
+                phone = rng.choice(risky) if pick < 0.08 else rng.choice(regulars) if pick < 0.35 else None
+                o = _make_order(rng, phone)
             covering = [d for d in driver_ids if o["governorate"] in d[1]]
             if not covering:
                 continue  # far-city orders were handled by a partner courier
@@ -132,13 +145,15 @@ def seed_demo(conn, days: int = 21) -> dict:
             cur = conn.execute(
                 "INSERT INTO orders (delivery_date, customer_name, phone, governorate, city, "
                 "address, landmark, product, cod_amount, slot, notes, lat, lng, "
-                "location_precision, status, driver_id) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'exact', ?, ?)",
+                "location_precision, status, driver_id, retry_of) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'exact', ?, ?, ?)",
                 (day.isoformat(), o["customer_name"], o["phone"], o["governorate"], o["city"],
                  o["address"], o["landmark"], o["product"], o["cod_amount_dt"],
                  {"morning": 1, "afternoon": 2}.get(o["slot"], 0), o["notes"],
-                 o["lat"], o["lng"], "failed" if failed else "delivered", driver_id),
+                 o["lat"], o["lng"], "failed" if failed else "delivered", driver_id, retry_of),
             )
+            if failed and retry_of is None and back > 1 and rng.random() < 0.4:
+                carry.append((cur.lastrowid, o))
             cash = 0 if failed else o["cod_amount_dt"]
             if not failed and rng.random() < 0.02:
                 cash = round(cash - rng.choice([5, 10, 20]), 1)  # occasional shortfall
@@ -153,6 +168,24 @@ def seed_demo(conn, days: int = 21) -> dict:
             count += 1
 
     return {"drivers": len(DRIVERS), "history_orders": count, "days": days}
+
+
+def ensure_accounts(conn) -> None:
+    """
+    Databases created before accounts existed have drivers but no users.
+    Give them the demo admin and one login per driver (first name).
+    """
+    if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
+        return
+    conn.execute("INSERT INTO users (username, password_hash, role, full_name) VALUES (?, ?, 'admin', ?)",
+                 (ADMIN_LOGIN[0], hash_password(ADMIN_LOGIN[1]), ADMIN_LOGIN[2]))
+    for d in conn.execute("SELECT id, name FROM drivers").fetchall():
+        username = d["name"].split()[0].lower()
+        if conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
+            username = f"{username}{d['id']}"
+        conn.execute("INSERT INTO users (username, password_hash, role, driver_id, full_name) "
+                     "VALUES (?, ?, 'driver', ?, ?)",
+                     (username, hash_password(DRIVER_PASSWORD), d["id"], d["name"]))
 
 
 def _workbook(rows, title="Orders"):
@@ -218,4 +251,7 @@ def sample_orders_xlsx(day: date, n: int = 58) -> bytes:
     rows.insert(20, dup)                       # same customer twice
     rows[25]["phone"] = "+216 " + rows[25]["phone"]  # valid, prefix stripped
     rows[30]["governorate"] = "Benarous"       # alias → Ben Arous
+    for i, place in ((40, "Cite El Khadra"), (45, "Borj Louzir")):
+        rows[i]["city"] = place                # not in the city table →
+        rows[i]["lat"] = rows[i]["lng"] = ""   # governorate-level location
     return _to_bytes(_workbook(rows))

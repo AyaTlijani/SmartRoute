@@ -24,7 +24,25 @@ CREATE TABLE IF NOT EXISTS drivers (
     depot_name  TEXT NOT NULL,
     depot_lat   REAL NOT NULL,
     depot_lng   REAL NOT NULL,
-    max_orders  INTEGER DEFAULT 20
+    max_orders  INTEGER DEFAULT 20,
+    active      INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    role          TEXT NOT NULL CHECK (role IN ('admin', 'driver')),
+    driver_id     INTEGER REFERENCES drivers(id) ON DELETE CASCADE,
+    full_name     TEXT NOT NULL,
+    active        INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token       TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS orders (
@@ -48,6 +66,8 @@ CREATE TABLE IF NOT EXISTS orders (
     driver_id          INTEGER REFERENCES drivers(id),
     stop_number        INTEGER,
     eta                TEXT,
+    unscheduled_reason TEXT,             -- set when the solver could not fit the stop
+    retry_of           INTEGER REFERENCES orders(id),
     created_at         TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -62,7 +82,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     photo_path     TEXT,
     lat            REAL,
     lng            REAL,
-    created_at     TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+    voided_at      TEXT                  -- set by "undo"; the row is kept for audit
 );
 
 CREATE TABLE IF NOT EXISTS routes (
@@ -72,17 +93,41 @@ CREATE TABLE IF NOT EXISTS routes (
     distance_km     REAL,
     driving_minutes INTEGER,
     source          TEXT,                -- ors | estimate
+    end_time        TEXT,                -- back at the depot
+    baseline_minutes INTEGER,            -- nearest-neighbour route, same matrix
+    baseline_late   INTEGER,             -- stops the baseline reaches after their window
     PRIMARY KEY (driver_id, delivery_date)
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_date ON orders(delivery_date);
 CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(phone);
+CREATE INDEX IF NOT EXISTS idx_attempts_order ON attempts(order_id);
+"""
+
+# Columns added after the first release. Older smartroute.db files get them
+# through ALTER TABLE, so nobody has to delete their database.
+MIGRATIONS = {
+    "drivers": [("active", "INTEGER NOT NULL DEFAULT 1")],
+    "orders": [("unscheduled_reason", "TEXT"), ("retry_of", "INTEGER REFERENCES orders(id)")],
+    "attempts": [("voided_at", "TEXT")],
+    "routes": [("end_time", "TEXT"), ("baseline_minutes", "INTEGER"), ("baseline_late", "INTEGER")],
+}
+
+# One retry per failed order, enforced by the database itself.
+POST_MIGRATION = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_retry_of ON orders(retry_of) WHERE retry_of IS NOT NULL;
 """
 
 
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        for table, columns in MIGRATIONS.items():
+            existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for name, definition in columns:
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        conn.executescript(POST_MIGRATION)
 
 
 @contextmanager
@@ -93,6 +138,9 @@ def connect():
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()  # all-or-nothing per request
+        raise
     finally:
         conn.close()
 
