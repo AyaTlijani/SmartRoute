@@ -1,33 +1,19 @@
-/*
- * index.css — Global stylesheet.
- *
- * The three @tailwind directives inject Tailwind's generated CSS:
- *   base        — Preflight (cross-browser normalisation on top of modern-normalize)
- *   components  — Any component classes from plugins (none used here)
- *   utilities   — All utility classes (bg-*, text-*, flex, etc.)
- *
- * Only classes that appear in the JSX files (per tailwind.config.js content list)
- * are included in the production build, keeping CSS output minimal.
- */
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/*
- * Smooth scrolling — used when the route result slides into view after
- * submitting the form on a long mobile screen.
- */
-html {
-  scroll-behavior: smooth;
+@layer base {
+  html { -webkit-tap-highlight-color: transparent; }
+  body { @apply bg-paper font-sans text-ink antialiased; font-feature-settings: "tnum" 0; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  :focus-visible { @apply outline-none ring-2 ring-brand ring-offset-2; }
+  /* iOS zooms into inputs smaller than 16px */
+  input, select, textarea { font-size: 16px; }
+  @media (min-width: 640px) { input, select, textarea { font-size: 14px; } }
 }
 
-/*
- * Prevent iOS Safari from auto-zooming into inputs (requires font-size >= 16px).
- * This ensures the form stays usable on iPhones without pinching to zoom out.
- */
-input,
-select,
-textarea {
-  font-size: 16px;
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+.leaflet-container { font-family: inherit; }

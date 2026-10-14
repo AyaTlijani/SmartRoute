@@ -166,6 +166,24 @@ def list_orders(day: Optional[str] = None, _: CurrentUser = Depends(require_admi
                           "WHERE o.delivery_date = ? ORDER BY o.id", (_day(day),))
 
 
+@router.get("/orders/{order_id}", tags=["Orders"])
+def order_detail(order_id: int, _: CurrentUser = Depends(require_admin)):
+    """One order with its full attempt history (undone attempts included)."""
+    with connect() as conn:
+        found = rows(conn, f"SELECT {_ORDER_FIELDS}, d.name AS driver_name FROM orders o "
+                           "LEFT JOIN drivers d ON d.id = o.driver_id WHERE o.id = ?", (order_id,))
+        if not found:
+            raise HTTPException(404, "Order not found")
+        o = found[0]
+        o["slot_label"] = SLOT_LABELS.get(o["slot"] or 0)
+        o["attempts"] = rows(conn, "SELECT a.*, d.name AS driver_name FROM attempts a "
+                                   "LEFT JOIN drivers d ON d.id = a.driver_id WHERE a.order_id = ? ORDER BY a.id",
+                             (order_id,))
+        for a in o["attempts"]:
+            a["has_photo"] = bool(a.pop("photo_path"))
+        return o
+
+
 @router.delete("/orders", tags=["Orders"])
 def clear_day(day: Optional[str] = None, _: CurrentUser = Depends(require_admin)):
     """Remove a day's orders that are not finished yet. Finished ones stay."""
@@ -200,7 +218,7 @@ def _eligibility(driver, governorate, count) -> Optional[str]:
     return None
 
 
-def _assign_pending(conn, d: str) -> None:
+def _assign_pending(conn, d: str) -> int:
     """
     Rule-based assignment:
 
@@ -219,6 +237,7 @@ def _assign_pending(conn, d: str) -> None:
         drv["sum_lat"] = sum(o["lat"] for o in mine)
         drv["sum_lng"] = sum(o["lng"] for o in mine)
 
+    assigned = 0
     pending = rows(conn, "SELECT id, governorate, lat, lng FROM orders "
                          "WHERE delivery_date = ? AND status = 'pending' ORDER BY governorate, lat", (d,))
     for o in pending:
@@ -238,6 +257,8 @@ def _assign_pending(conn, d: str) -> None:
             best["count"] += 1
             best["sum_lat"] += o["lat"]
             best["sum_lng"] += o["lng"]
+            assigned += 1
+    return assigned
 
 
 def _unassigned_reason(conn, order, drivers, counts) -> str:
@@ -344,9 +365,9 @@ def dispatch_assign(req: DayRequest, _: CurrentUser = Depends(require_admin)):
     """Assign pending orders, then recompute every driver's route."""
     d = _day(req.day)
     with connect() as conn:
-        _assign_pending(conn, d)
+        n = _assign_pending(conn, d)
         _route_all(conn, d)
-    return _dispatch_view(d)
+    return {**_dispatch_view(d), "assigned_now": n}
 
 
 @router.post("/dispatch/reoptimize", tags=["Dispatch"])
@@ -519,8 +540,8 @@ async def deliver(
             name = f"{uuid.uuid4().hex}{ext}"  # never trust the uploaded file name
             with open(os.path.join(UPLOAD_DIR, name), "wb") as f:
                 f.write(data)
-        conn.execute("INSERT INTO attempts (order_id, driver_id, result, cash_collected, photo_path, lat, lng) "
-                     "VALUES (?, ?, 'delivered', ?, ?, ?, ?)",
+        conn.execute("INSERT INTO attempts (order_id, driver_id, result, cash_collected, photo_path, lat, lng, created_at) "
+                     "VALUES (?, ?, 'delivered', ?, ?, ?, ?, datetime('now', 'localtime'))",
                      (order_id, o["driver_id"], cash_collected, name, lat, lng))
         conn.execute("UPDATE orders SET status = 'delivered' WHERE id = ?", (order_id,))
     return {"ok": True}
@@ -540,8 +561,8 @@ def fail(order_id: int, req: FailRequest, user: CurrentUser = Depends(current_us
     with connect() as conn:
         o = _own_order(conn, order_id, user)
         _check_open(o)
-        conn.execute("INSERT INTO attempts (order_id, driver_id, result, reason, note, lat, lng) "
-                     "VALUES (?, ?, 'failed', ?, ?, ?, ?)",
+        conn.execute("INSERT INTO attempts (order_id, driver_id, result, reason, note, lat, lng, created_at) "
+                     "VALUES (?, ?, 'failed', ?, ?, ?, ?, datetime('now', 'localtime'))",
                      (order_id, o["driver_id"], req.reason, req.note, req.lat, req.lng))
         conn.execute("UPDATE orders SET status = 'failed' WHERE id = ?", (order_id,))
     return {"ok": True}
@@ -561,7 +582,7 @@ def undo(order_id: int, user: CurrentUser = Depends(current_user)):
             raise HTTPException(409, "A retry was already scheduled for this order; undo is locked.")
         conn.execute("UPDATE attempts SET voided_at = ? WHERE id = (SELECT MAX(id) FROM attempts "
                      "WHERE order_id = ? AND voided_at IS NULL)",
-                     (datetime.now(timezone.utc).isoformat(timespec="seconds"), order_id))
+                     (datetime.now().isoformat(sep=" ", timespec="seconds"), order_id))
         conn.execute("UPDATE orders SET status = 'assigned' WHERE id = ?", (order_id,))
     return {"ok": True}
 

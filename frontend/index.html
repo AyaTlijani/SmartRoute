@@ -2,43 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <!--
-      viewport meta tag:
-        width=device-width  — use the device's natural pixel width
-        initial-scale=1.0   — no zoom on first load (critical for mobile drivers)
-        viewport-fit=cover  — let content extend into iPhone notch/safe areas
-    -->
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
-    />
-
-    <!-- Theme colour shown in browser chrome on Android/Chrome -->
-    <meta name="theme-color" content="#2563eb" />
-
-    <!-- Prevent browser from suggesting phone-number auto-links in addresses -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0F1C2E" />
     <meta name="format-detection" content="telephone=no" />
-
-    <title>Delivery Route Optimizer</title>
-
-    <!--
-      Favicon placeholder — replace with a real icon for production.
-      Using a data-URI emoji favicon to avoid a 404 during development.
-    -->
-    <link
-      rel="icon"
-      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚚</text></svg>"
-    />
+    <title>SmartRoute</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%230B65A6%22/><path d=%22M9 22c0-4 3-5 7-5s7-1 7-5%22 stroke=%22white%22 stroke-width=%222.6%22 fill=%22none%22 stroke-linecap=%22round%22/><circle cx=%229%22 cy=%2222%22 r=%222.6%22 fill=%22white%22/><circle cx=%2223%22 cy=%2212%22 r=%222.6%22 fill=%22white%22/></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   </head>
   <body>
-    <!--
-      #root is the React mount point.
-      Tailwind's "min-h-screen" on App's outer div ensures the grey
-      background fills the full viewport even on short pages.
-    -->
     <div id="root"></div>
-
-    <!-- Vite injects the correct hashed bundle URL during build -->
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

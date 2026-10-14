@@ -10,10 +10,10 @@
  */
 
 import React, { useState } from "react";
-import axios from "axios";
-import AddressForm from "./AddressForm";
-import RouteDisplay from "./RouteDisplay";
-import { API_URL } from "../api";
+import AddressForm from "../../components/AddressForm";
+import RouteDisplay from "../../components/RouteDisplay";
+import { api } from "../../api";
+import { PageHeader } from "../../components/ui";
 
 export default function QuickPlanner() {
   const [route, setRoute] = useState(null);
@@ -26,8 +26,8 @@ export default function QuickPlanner() {
     setRoute(null);
 
     try {
-      const response = await axios.post(
-        `${API_URL}/optimize-route`,
+      const response = await api.post(
+        "/optimize-route",
         formData
       );
 
@@ -76,32 +76,10 @@ export default function QuickPlanner() {
 
       <main>
 
-        {/* ========================================================
-            HERO
-            ======================================================== */}
-
-        <section className="py-8 sm:py-10">
-
-          <div className="max-w-3xl">
-
-            <p className="mb-2 text-sm font-semibold uppercase tracking-wider text-blue-600">
-              Logistics optimization
-            </p>
-
-            <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-              Quick route planner
-            </h2>
-
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600 sm:text-base">
-              Type any addresses and time windows and get an optimized
-              driving sequence. Uses OpenRouteService for geocoding, so
-              it needs ORS_API_KEY in backend/.env.
-            </p>
-
-          </div>
-
-        </section>
-
+        <PageHeader
+          title="Quick planner"
+          description="Plan one route from typed addresses, outside the daily workflow. Addresses are geocoded with OpenRouteService, so this needs ORS_API_KEY in backend/.env."
+        />
 
         {/* ========================================================
             PLANNING CARD
@@ -109,7 +87,7 @@ export default function QuickPlanner() {
 
         <section
           aria-labelledby="planning-title"
-          className="rounded-2xl border border-slate-200 bg-white
+          className="rounded-lg border border-slate-200 bg-white
             shadow-sm"
         >
 
@@ -130,13 +108,6 @@ export default function QuickPlanner() {
                   Set the starting point and delivery constraints.
                 </p>
 
-              </div>
-
-              <div
-                className="hidden rounded-lg bg-blue-50 px-3 py-2
-                  text-xs font-semibold text-blue-700 sm:block"
-              >
-                Step 1 · Planning
               </div>
 
             </div>
@@ -164,7 +135,7 @@ export default function QuickPlanner() {
           <section
             role="alert"
             aria-live="assertive"
-            className="mt-5 rounded-2xl border border-red-200
+            className="mt-5 rounded-lg border border-red-200
               bg-red-50 p-5"
           >
 
@@ -214,7 +185,7 @@ export default function QuickPlanner() {
 
           <section
             aria-live="polite"
-            className="mt-5 rounded-2xl border border-blue-100
+            className="mt-5 rounded-lg border border-blue-100
               bg-blue-50 p-5"
           >
 

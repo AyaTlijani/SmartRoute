@@ -7,427 +7,358 @@ This document describes what the code currently does. It does not describe plann
 
 SmartRoute is a web app for a small delivery company in Tunisia. It covers one delivery day:
 
-1. An admin uploads an Excel file of confirmed orders.
-2. The app checks each row and imports the valid ones into a database.
-3. The app assigns orders to drivers based on governorate, then computes an ordered route for each driver.
-4. A driver opens a phone-sized page, follows the stops, and marks each order delivered (with cash amount and optional photo) or failed (with a reason).
-5. The admin sees order statuses and an analytics page.
+1. An admin signs in and uploads an Excel file of confirmed orders.
+2. The app checks every row. The admin fixes or excludes problem rows, then imports.
+3. Orders are assigned to drivers by governorate, capacity and distance.
+4. Each driver's stops are ordered by an OR-Tools route solver with time windows.
+5. Each driver signs in on a phone and sees only their own stops. For each stop they record delivered (cash + optional photo) or failed (reason).
+6. The admin follows progress on Overview, decides on failed orders (retry next day), and reads Analytics.
 
-The app also contains the original "Quick planner": a form where you type a depot and up to 20 addresses and get one optimized route.
-
-There is no login. Anyone who opens the app can use the admin pages and any driver's page.
+The original "Quick planner" (typed addresses to one route) is still available to admins.
 
 
 ## 2. Stack
 
 Backend:
-- Python, FastAPI, Uvicorn
-- Google OR-Tools (route optimization)
-- SQLite through Python's built-in sqlite3 module (no ORM)
-- openpyxl (read and write Excel files)
-- python-multipart (file uploads)
-- requests and python-dotenv (OpenRouteService client and .env loading)
+- Python, FastAPI, Uvicorn, Pydantic
+- Google OR-Tools
+- SQLite through the built-in sqlite3 module (no ORM)
+- openpyxl, python-multipart, requests, python-dotenv
+- Password hashing and tokens use the standard library (hashlib PBKDF2, secrets)
 
 Frontend:
 - React 18, Vite, Tailwind CSS
-- Leaflet and react-leaflet (map), OpenStreetMap tiles
-- axios (HTTP)
+- react-router-dom (pages and route guards)
+- lucide-react (icons)
+- Leaflet, react-leaflet (maps), OpenStreetMap tiles
+- axios
+- IBM Plex Sans font (Google Fonts)
 
-Project layout:
-
-    backend/
-      main.py            FastAPI app, original /optimize-route endpoint, startup
-      dispatch.py        all endpoints of the daily workflow
-      vrptw_solver.py    OR-Tools route solver
-      distance.py        OpenRouteService client + distance-based fallback
-      orders_import.py   Excel reading and row validation
-      tunisia.py         governorates, cities, coordinates, spelling aliases
-      sample_data.py     demo drivers, demo history, sample and template Excel files
-      db.py              SQLite schema and connection helper
-      config.py          reads ORS_API_KEY from .env
-      models.py          Pydantic models for /optimize-route
-      requirements.txt
-    frontend/src/
-      App.jsx            page shell, tabs, hash routing, delivery-day picker
-      api.js             axios instance and small helpers
-      components/
-        ImportView.jsx     Import tab
-        DispatchView.jsx   Dispatch tab
-        DriverView.jsx     Driver app
-        AnalyticsView.jsx  Analytics tab
-        QuickPlanner.jsx   original address planner
-        AddressForm.jsx    form used by the Quick planner
-        RouteDisplay.jsx   result view used by the Quick planner
-        RouteMap.jsx       Leaflet map used by Quick planner, Dispatch and Driver app
-        ui.jsx             shared buttons, cards, badges, stat tiles
+Tests: pytest and httpx (FastAPI TestClient), listed in `backend/requirements-dev.txt`.
 
 
-## 3. Running modes: with or without an API key
+## 3. Accounts and access
 
-`config.py` reads `ORS_API_KEY` from `backend/.env`. The app starts either way.
+Roles:
+- **admin**: every admin endpoint and page.
+- **driver**: linked to one driver record. Can read only `/me/day`, and can only deliver, fail, undo or view the photo of orders assigned to them.
 
-Without a key (default):
-- Locations come from the Excel file (lat/lng columns) or from the built-in Tunisia table.
-- Travel time between two points is estimated from straight-line distance:
-  - road distance = straight-line distance x 1.3
-  - speed = 25 km/h if that distance is under 15 km, otherwise 70 km/h
-  - plus 2 minutes per trip (parking)
-- The map shows straight lines between stops, labelled "Stop order (straight lines)".
-- The Quick planner returns an error (HTTP 503) because it needs the key to geocode typed addresses.
+Login:
+- `POST /auth/login` checks the PBKDF2-SHA256 hash (200,000 iterations, random salt).
+- It creates a session row with a random 32-byte token valid for 7 days, and returns the token.
+- The frontend stores the token in localStorage and sends `Authorization: Bearer <token>`.
+- `POST /auth/logout` deletes the session. Resetting a driver's password deletes all of that driver's sessions.
 
-With a key:
-- The dispatch workflow asks OpenRouteService for the travel-time matrix and the road geometry. If an ORS call fails, it falls back to the estimate above.
-- The Quick planner works: it geocodes the addresses with ORS, then solves and draws the road route.
+Every endpoint except `/health`, `/auth/login` and `/auth/logout` requires a valid session:
+- Wrong role: HTTP 403.
+- Missing or expired session: HTTP 401, and the frontend returns to the login page.
+- A disabled user account cannot sign in.
+
+Demo accounts (created with the demo data):
+
+    admin / admin123
+    ahmed, sami, youssef, mehdi, karim / driver123
+
+A database created by the earlier version (drivers but no users) gets these accounts at startup. Driver usernames are their first names.
 
 
 ## 4. Data model (SQLite)
 
-The database file is `backend/smartroute.db`. Another path can be set with the `SMARTROUTE_DB` environment variable.
+The file is `backend/smartroute.db`; the `SMARTROUTE_DB` environment variable overrides the path. Foreign keys are on. Each request runs in one transaction that is rolled back on error. Columns added in this version are added to older databases with ALTER TABLE at startup.
 
-Table `drivers`
-- id, name, phone, vehicle (text)
-- zones: comma-separated governorate names the driver covers
-- depot_name, depot_lat, depot_lng: where the driver's route starts
-- max_orders: maximum orders per day (default 20)
+drivers
+- id, name, phone, vehicle
+- zones: comma-separated governorates
+- depot_name, depot_lat, depot_lng
+- max_orders (default 20)
+- active (1/0)
 
-Table `orders`
-- id, delivery_date (YYYY-MM-DD)
-- customer_name, phone (8 digits), governorate, city, address, landmark, product, notes
-- cod_amount: cash to collect, in dinars
-- slot: 0 = any time, 1 = morning, 2 = afternoon
+users
+- id, username (unique, case-insensitive), password_hash, full_name, active, created_at
+- role: "admin" or "driver"
+- driver_id: set for drivers
+
+sessions
+- token, user_id, expires_at
+
+orders
+- id, delivery_date, customer_name, phone (8 digits), governorate, city, address, landmark, product, notes, created_at
+- cod_amount (DT)
+- slot: 0 any time, 1 morning, 2 afternoon
 - lat, lng, location_precision ("exact", "city" or "governorate")
-- status: "pending", "assigned", "delivered" or "failed"
-- driver_id, stop_number (position in the route), eta (text like "10:24 AM")
-- created_at
+- status: pending, assigned, delivered or failed
+- driver_id, stop_number, eta
+- unscheduled_reason: why the solver could not fit this stop
+- retry_of: the failed order this one retries. A unique index allows one retry per order.
 
-Table `attempts` (one row per delivered or failed action)
-- id, order_id, driver_id
-- result: "delivered" or "failed"
-- reason, note (for failures)
-- cash_collected
-- photo_path (file name in backend/uploads)
-- lat, lng (driver's phone position, if the browser gave it)
-- created_at
+attempts (one row per delivered/failed action)
+- id, order_id, driver_id, result, reason, note, cash_collected
+- photo_path: random file name in backend/uploads
+- lat, lng, created_at (server local time)
+- voided_at: set by undo; the row is kept
 
-Table `routes` (one row per driver per day)
+routes (one row per driver per day)
 - driver_id, delivery_date
-- geometry: JSON list of [lng, lat] points
-- distance_km, driving_minutes
+- geometry: [lng, lat] points, depot → stops → depot
+- distance_km
+- driving_minutes: on the solver's travel-time matrix, including the return to the depot
 - source: "ors" or "estimate"
+- end_time: when the driver is back at the depot
+- baseline_minutes, baseline_late: the nearest-neighbour route on the same matrix
 
-Order status flow:
+Order lifecycle:
 
-    pending  --assign-->  assigned  --driver-->  delivered
-                                    --driver-->  failed
-    delivered or failed  --undo-->  assigned
-    assigned  --reassign to nobody-->  pending
-
-"Retry tomorrow" on a failed order does not change that order. It creates a new pending order with the same details for the next day, with "Retry." added at the start of its notes.
-
-
-## 5. Demo data
-
-On startup, the backend creates the tables. If the drivers table is empty, it loads demo data. `POST /demo/reset` deletes everything and loads it again.
-
-Demo drivers:
-
-    Ahmed Trabelsi   scooter  Tunis, Ariana              depot: SmartRoute Hub, Charguia
-    Sami Ben Ali     scooter  Tunis, Ben Arous           depot: SmartRoute Hub, Charguia
-    Youssef Gharbi   car      Ariana, Manouba, Ben Arous depot: SmartRoute Hub, Charguia
-    Mehdi Jlassi     car      Sousse, Monastir, Mahdia   depot: Sousse relay point
-    Karim Masmoudi   car      Sfax                       depot: Sfax relay point
-
-Demo history:
-- 21 past days, 28 to 46 orders per day, 8 more on Mondays.
-- Every order is already delivered or failed, with an attempt row.
-- Orders in governorates no driver covers are not created in the history.
-- Built-in patterns:
-  - base failure chance 10%
-  - +10% in Manouba, +5% in Ben Arous
-  - +6% for Youssef Gharbi
-  - a fixed group of 12 "risky" phone numbers fail 65% of the time
-  - about 2% of deliveries collect 5, 10 or 20 DT less than the amount due
-- A phone number always maps to the same customer name.
-
-All demo names, phones and addresses are generated. They are not real people.
+    pending  --assign / manual-->  assigned  --driver-->  delivered | failed
+    assigned --"Unassigned" / driver deactivated or zone removed-->  pending
+    delivered | failed  --undo-->  assigned   (attempt kept, marked voided; locked once a retry exists)
+    failed  --retry-->  new pending order on the next day with retry_of = original id (idempotent)
 
 
-## 6. Excel import
+## 5. Travel times (provider and fallback)
 
-### 6.1 Files the app provides
-- `GET /excel/template`: empty template with one example row, plus a "How to fill" sheet.
-- `GET /excel/sample?day=YYYY-MM-DD`: 58 generated orders plus one duplicate (59 rows), with deliberate problems:
+`distance.py` is the only module that knows about the routing provider. The solver only receives a matrix of minutes.
+
+- With `ORS_API_KEY`: the OpenRouteService matrix API gives travel times and the directions API gives road geometry and distance. If a call fails, the estimate is used for that route.
+- Without a key: road distance = straight line × 1.3. Speed is 25 km/h under 15 km and 70 km/h otherwise, plus 2 minutes per trip. The geometry is straight segments between stops.
+
+The routes table records which source was used. The Dispatch page shows "Estimated" or "Road network", and labels straight lines as "Stop order (straight lines)".
+
+
+## 6. Locations
+
+Resolution order for each order:
+1. lat/lng columns in the Excel file, if inside Tunisia (lat 30–38, lng 7–12): "exact".
+2. The city, if it is in the built-in table (about 40 places) and belongs to the same governorate: "city".
+3. Otherwise the governorate's main city: "governorate". The import shows a warning; Orders, Dispatch and the driver screen show "Approximate location".
+
+Orders are always identified by their numeric id. Two orders at the same address are separate stops.
+
+
+## 7. Excel import
+
+Files:
+- `GET /excel/template`: empty template plus a "How to fill" sheet.
+- `GET /excel/sample?day=`: 59 generated rows with deliberate problems:
   - a 7-digit phone
-  - "Ariena" as governorate
+  - "Ariena"
   - a missing address
-  - "cent dinars" as amount
-  - a duplicated customer
+  - "cent dinars"
+  - a duplicate customer
   - a "+216" prefix
-  - "Benarous" as governorate
-  - some rows without lat/lng
+  - "Benarous"
+  - two unknown cities (approximate location)
 
-### 6.2 Reading
-- Only the first sheet is read; the first row must be the header row.
-- Headers are matched without regard to case, accents, spaces, dashes or underscores. Accepted names:
+Limits: `.xlsx` only, checked by extension and by zip signature. At most 5 MB and 2,000 rows.
 
-      customer_name  customer, name, nom, client, nom client
-      phone          telephone, tel, mobile, numero, gsm
-      governorate    gouvernorat, region, state
-      city           ville, delegation, town
-      address        adresse
-      landmark       repere, point de repere, reference
-      product        produit, article, item
-      cod_amount_dt  cod, amount, montant, prix, price, cod amount
-      slot           creneau, time slot, time
-      notes          note, remarque, comment
-      lat            latitude
-      lng            lon, long, longitude
+Reading:
+- First sheet, first row is the header.
+- Headers are matched without regard to case, accents or separators.
+- English, French and short names are accepted (for example nom, téléphone, gouvernorat, ville, adresse, montant, créneau).
 
-- Unknown columns are ignored. Empty rows are skipped.
-- The file is rejected if no phone or governorate column is found.
+Errors (row cannot be imported):
+- missing name, phone, governorate, address or COD
+- phone not 8 digits starting 2–9 after removing spaces and a 216/00216 prefix
+- unknown governorate, with a "did you mean" suggestion when one is close. The 24 names, spelling variants, some Arabic names, and Djerba/Jerba (mapped to Medenine) are accepted.
+- COD not a number or outside 0–10,000. "DT", "TND" and a decimal comma are accepted.
+- unknown slot
+- lat/lng outside Tunisia
 
-### 6.3 Row checks
-Errors block a row from being imported:
-- Missing customer name, phone, governorate, address or cash amount.
-- Phone not valid after cleaning. Cleaning removes everything except digits and strips a leading "216" or "00216". The result must be 8 digits starting with 2 to 9.
-- Governorate not recognised. Recognition accepts:
-  - the 24 names, without regard to case or accents
-  - listed spelling variants (for example Benarous, Bizerta, Nabel, El Kef)
-  - some Arabic names
-  - Djerba or Jerba, which map to Medenine
+Warnings (importable):
+- same phone earlier in the file
+- customer already has an order that day
+- 2 or more past failed orders for that phone
+- approximate location
 
-  If the name is close to a known one, the error includes a suggestion ("did you mean Ariana?").
-- Cash amount not a number, below 0 or above 10,000. "DT", "TND" and "dinar(s)" are removed, and a comma counts as a decimal point.
-- Slot not recognised. Accepted values:
-  - empty, "any", "all day", "journee" or 0 → any time
-  - "morning", "matin", "am" or 1 → morning
-  - "afternoon", "apres midi", "pm", "soir" or 2 → afternoon
-- lat/lng given but outside Tunisia (lat 30–38, lng 7–12).
-
-Warnings do not block a row:
-- Same phone as an earlier row in the file ("possible duplicate").
-- The customer already has an order on that delivery day.
-- Risky customer: this phone has 2 or more failed orders in the database.
-- Approximate location: no lat/lng and the city was not found, so the governorate centre is used.
-
-### 6.4 Location of each order
-1. lat/lng from the file, if present and valid (precision "exact").
-2. Otherwise the city, if it is in the built-in table and belongs to the same governorate (precision "city"). The table holds about 40 cities and neighbourhoods, mostly in Grand Tunis, the Sahel and Sfax.
-3. Otherwise the governorate's main city (precision "governorate").
-
-### 6.5 Import screen behaviour
-- Upload by drag-and-drop or file picker. The backend returns every row with its status (ok, warning or error), messages and suggestions.
-- Summary tiles show total, ready, warnings and errors. A filter shows all rows or only problem rows.
-- A "Use ..." button applies a governorate suggestion and re-checks all rows (`POST /orders/revalidate`).
-- Each row has an import checkbox:
-  - error rows cannot be ticked
-  - rows with a "possible duplicate" warning start unticked
-  - all other rows start ticked
-- "Import N orders" sends the ticked rows. The backend checks them again and saves only rows without errors as "pending" orders for the selected day.
-- The page also shows how many orders already exist for the day by status, and has a "Clear day" button. It deletes that day's pending and assigned orders and its routes.
+Review screen:
+- Tabs show rows that need a look, or all rows.
+- "Use X" applies a suggestion. "Edit row" opens a form for every field. Both re-check all rows on the server (`/orders/revalidate`).
+- Error rows cannot be ticked. Possible duplicates start unticked.
+- On import, the server checks the ticked rows again and saves those without errors as pending. The page reports imported, rejected and excluded counts.
 
 
-## 7. Assignment
+## 8. Assignment
 
-Triggered by "Assign & optimize routes" on the Dispatch page (`POST /dispatch/assign`).
+`POST /dispatch/assign` handles the day's pending orders, sorted by governorate then latitude.
 
-1. Only orders with status "pending" on the selected day are assigned. Already assigned orders keep their driver.
-2. Pending orders are processed sorted by governorate, then latitude.
-3. A driver can take an order if the order's governorate is in the driver's zones and the driver has fewer than max_orders orders that day.
-4. Among those drivers, the one with the lowest score gets the order:
+- **Eligible driver:** active, covers the governorate, has fewer than max_orders orders that day.
+- **Choice:** the lowest score wins:
 
-       score = orders the driver already has that day
-             + 0.5 x distance in km from the order to the driver's centre point
+      score = orders already assigned + 0.5 × km from the order to the average position of the driver's orders
+              (the depot when the driver has none)
 
-   The centre point is the average position of the driver's orders that day, or the depot if the driver has none yet.
-5. If no driver can take the order, it stays "pending". The Dispatch page lists it as unassigned with a reason:
-   - "No driver covers <governorate>", or
-   - "All drivers for this zone are full".
-6. After assignment, every driver's route is recomputed (section 8).
+- **No eligible driver:** the order stays pending, with a reason:
+  - "No driver covers X"
+  - "All drivers covering X are inactive"
+  - "All drivers covering X are full"
 
-Manual change: on the Dispatch page, each pending or assigned order has a driver dropdown (`POST /orders/{id}/reassign`).
-- Choosing a driver sets the order to "assigned".
-- Choosing "Unassigned" sets it back to "pending".
-- The routes of the old and new driver are recomputed.
+Manual reassignment (`POST /orders/{id}/reassign`):
+- The server checks the same eligibility and returns 400 with the reason.
+- The Dispatch dropdown only lists eligible drivers.
+- Both affected routes are recomputed.
+
+When a driver is deactivated, or a zone is removed from them, their open orders from today on go back to pending.
 
 
-## 8. Route computation (per driver)
+## 9. Route optimization
 
-For each driver, the route uses that day's orders with status "assigned":
-- Points: the driver's depot, then each order's location.
-- Travel-time matrix in minutes (ORS or estimate, section 3).
-- Time is counted in minutes after 9:00 AM:
-  - depot: 0–540 (9:00 AM to 6:00 PM)
+`dispatch._route_driver` runs for one driver and day:
+- **Input:** orders with status "assigned". Delivered and failed orders are left untouched and keep their stop numbers; new stop numbers continue after them.
+- **Time model:** minutes after 9:00 AM.
+  - depot: 0–540 (back by 6:00 PM)
   - any time: 0–480
-  - morning: 0–180 (9:00 AM to 12:00 PM)
-  - afternoon: 240–480 (1:00 PM to 5:00 PM)
-- Service time: 10 minutes at each stop.
-- Solver (`vrptw_solver.py`, OR-Tools):
-  - one vehicle, starts at the depot at 9:00
-  - must be back by 6:00 PM
-  - minimises total driving time
-  - first solution: parallel cheapest insertion
-  - improvement: guided local search
-  - time limit: 1 second for 8 stops or fewer, 2 seconds otherwise
-- A stop that cannot fit its time window is skipped rather than failing the route (penalty 100,000 per skipped stop). It keeps status "assigned" with no stop number. The UI shows it as "Doesn't fit slot", and the driver card says how many stops don't fit.
-- Each routed order gets a stop_number and an ETA (arrival time from the solver).
-- Geometry and totals are computed for the path depot → stops in order. They do not include the return to the depot. The result is saved in the routes table.
+  - morning: 0–180
+  - afternoon: 240–480
+  - 10 minutes service per stop
+- **Solver** (`vrptw_solver.py`): OR-Tools routing with a time dimension and the windows above. It minimizes total travel time, starting and ending at the depot.
+  - First solution: parallel cheapest insertion.
+  - Improvement: guided local search for 1 second (8 stops or fewer) or 2 seconds.
+  - Every stop is optional with a penalty of 100,000, so an impossible stop is skipped instead of making the whole route infeasible. The solution is good, not proven optimal.
+- **Skipped stops** keep status "assigned" with no stop number, plus an unscheduled_reason:
+  - "Too far to reach in its ... window: N min from the depot, window closes at ..."
+  - "Can't reach it and return to the depot within the working day"
+  - "The route is full in its ... window"
 
-Recomputing a route clears and rewrites stop numbers, ETAs and the route row for that driver and day. Orders already delivered or failed are not included and keep their old stop numbers.
+  The Dispatch page, the order detail, the driver screen and the Overview page all show it.
+- **Scoring:** `route_eval.simulate` drives the route on the same matrix (waiting if early, counting late stops). The nearest-neighbour route is scored the same way. Both results are stored in the routes table.
 
-
-## 9. Dispatch page (admin)
-
-- Summary tiles: total orders, unassigned, to deliver, delivered, failed.
-- One card per driver:
-  - name, zones, vehicle
-  - order count / max
-  - progress bar of finished stops
-  - route km and driving minutes
-  - warning if some stops don't fit their slot
-- Clicking a driver card shows:
-  - the route map: depot marker "D", numbered stop markers, route line
-  - starting depot, cash to collect, cash collected
-  - "Open driver app" button
-  - the order table: stop number, ETA and slot, customer with history badge, location, cash, status, action
-- Actions in the order table:
-  - driver dropdown (pending or assigned orders)
-  - "Retry tomorrow" (failed orders; after use it shows "Moved to tomorrow" until the page reloads)
-  - "Proof photo" link (delivered orders with a photo)
-- Unassigned orders are listed in a separate table with their reason and a driver dropdown.
-- The page reloads its data from the server every 15 seconds.
-
-Customer history badge (based on other orders with the same phone that are delivered or failed):
-- "Risky: X/Y failed" if 2 or more failed
-- "Trusted · Y orders" if 3 or more orders and none failed
-- "New customer" if no previous orders
+Benchmark: `python evaluate.py` runs 30 generated days, with and without time windows. It compares Excel order, latitude order, nearest neighbour and OR-Tools on identical inputs. Results are in `backend/evaluation_results.md`.
 
 
-## 10. Driver app (phone layout)
+## 10. Admin pages
 
-Address: `#/driver` (driver list) or `#/driver/<id>`. There is no login; the driver is picked from a list.
+The sidebar holds Overview, Import orders, Dispatch, Orders, Drivers, Analytics, and Quick planner under Tools. Overview, Import, Dispatch and Orders share a day picker (previous/next/today).
 
-Screen content:
-- Header: driver name, day, depot, "Switch" (change driver) and "Admin" links.
-- Summary: stops done / total, progress bar, cash collected and cash expected.
-- "Stops" and "Map" tabs. The map shows all routed stops and the route line.
-- The first unfinished stop is open by default and marked "Next stop". Tapping another stop opens it instead.
+**Overview** (`GET /overview?day=`):
+- Order counts, completion %, delivered-on-attempt %, cash collected vs expected, active drivers.
+- **Needs attention** items, each linking to the right page:
+  - no orders
+  - unassigned orders
+  - stops off the route
+  - failed deliveries with no retry
+  - cash gap
+  - approximate locations
+  - customers who refused before
+- Per-driver progress bars, return time, and the last 8 driver updates.
+- Refreshes every 20 seconds.
 
-An open stop shows:
-- stop number and ETA, customer name and history badge, cash to collect
-- address and city, landmark, product, notes
-- an "Approximate location: call the customer" notice when only the governorate is known
-- slot
-- Buttons:
-  - Call: opens `tel:+216<phone>`
-  - Navigate: opens Google Maps directions to the stop's lat/lng
-  - Failed
-  - Delivered
+**Dispatch**:
+- Summary strip, driver list (load/capacity, progress, driving minutes) and an Unassigned entry.
+- Selected driver: driving time, distance, return time, cash, the comparison with nearest-stop-first, the map (stop markers colored by status), and the stop table with eligible-driver dropdowns.
+- Buttons: Assign, and Re-optimize (recompute all routes).
+- Refreshes every 15 seconds.
 
-"Delivered":
-- A panel asks for cash collected (pre-filled with the amount due) and an optional photo.
-- On phones, the photo input opens the camera directly.
-- A note appears if the cash is lower than the amount due.
-- The browser's GPS position is requested (3-second limit) and sent if available.
-- The backend saves the photo in `backend/uploads/` and creates an attempt. The order becomes "delivered".
+**Orders**:
+- The day's orders, with status tabs and search by name, phone, city or id.
+- Clicking an order opens its detail: fields, location precision, customer history, unscheduled reason, retry links, every attempt including undone ones (struck through), the proof photo (loaded through the authenticated endpoint), and "Retry next day" for failed orders.
 
-"Failed":
-- The driver picks a reason: No answer, Customer refused, Not at home, Wrong address, Other. An optional note can be added.
-- The GPS position is sent if available. The order becomes "failed".
+**Drivers**:
+- List with login, zones, depot, today's load / capacity, all-time delivered %, and an active switch.
+- Add driver creates the driver and their login (username + temporary password). Edit changes name, phone, vehicle, capacity, depot (from a preset list) and zones (24 checkboxes). Password sets a new password.
 
-Finished stops appear in a "Finished" list with an "Undo" button. Undo deletes the latest attempt and sets the order back to "assigned".
+**Analytics**: see section 12.
 
-When all stops are finished, the screen shows "Route finished" and the cash to hand over.
-
-
-## 11. Analytics page
-
-Data: all attempts for orders whose delivery date is within the last 7, 30 or 90 days (chosen on the page). Each delivered or failed action counts as one attempt.
-
-Shown:
-- Success rate (delivered / attempts), delivered count, failed count, worst governorate.
-- Cash collected, and the gap between cash due on delivered orders and cash collected.
-- Deliveries per day: stacked bars of delivered and failed, with exact numbers on hover.
-- Success rate by driver.
-- Success rate by governorate, lowest first.
-- Failure reasons, by count.
-- Customers who keep refusing: phones with 2 or more failed attempts (top 8).
+**Quick planner**: the original form. It needs ORS_API_KEY; without it, the server answers 503 with that explanation.
 
 
-## 12. Quick planner (original feature)
+## 11. Driver app (phone)
 
-- Form: depot address plus up to 20 delivery addresses, each with slot 1 (morning) or 2 (afternoon).
-- `POST /optimize-route`:
-  1. geocodes the addresses with ORS
-  2. builds the ORS travel-time matrix
-  3. runs the same OR-Tools solver
-  4. gets the road route from ORS
-  5. returns ordered stops with ETAs, distance, driving time, service time and a Google Maps link
-- Requires ORS_API_KEY; returns 503 without it.
-- Stops are matched to coordinates by their position in the list, so two identical addresses are handled correctly.
-- Nothing is saved to the database.
+Address `/driver`; only reachable with a driver session.
 
-
-## 13. API reference
-
-Health:
-
-    GET    /health
-
-Demo and files:
-
-    POST   /demo/reset                  wipe and reload demo data
-    GET    /excel/template              download template .xlsx
-    GET    /excel/sample?day=           download sample day .xlsx
-
-Orders and import:
-
-    POST   /orders/validate             form-data: file, day  -> rows with status and messages
-    POST   /orders/revalidate           JSON {day, rows}      -> same, for corrected rows
-    POST   /orders/import               JSON {day, rows}      -> saves rows without errors
-    GET    /orders?day=                 all orders of a day
-    DELETE /orders?day=                 delete a day's pending and assigned orders
-
-Drivers and dispatch:
-
-    GET    /drivers                     list drivers
-    POST   /dispatch/assign             JSON {day} -> assign pending orders, recompute routes
-    GET    /dispatch?day=               drivers with orders, routes, stats; unassigned orders
-    POST   /orders/{id}/reassign        JSON {driver_id or null}
-    POST   /orders/{id}/retry-tomorrow  copy a failed order to the next day
-    GET    /drivers/{id}/day?day=       one driver's orders, route and stats
-
-Driver actions:
-
-    POST   /orders/{id}/deliver         form-data: cash_collected, lat?, lng?, photo?
-    POST   /orders/{id}/fail            JSON {reason, note?, lat?, lng?}
-    POST   /orders/{id}/undo            remove last attempt, back to assigned
-
-Analytics and photos:
-
-    GET    /analytics?days=30
-    GET    /photos/{file}               saved delivery photos
-
-Original planner:
-
-    POST   /optimize-route
-
-If no day is given, the server's current date is used. Interactive API docs are at http://localhost:8000/docs.
+- **Header:** name, day, stops done, cash collected vs to collect, progress bar, planned return time.
+- **Tabs:**
+  - To do: the stops in route order. The next stop is open and highlighted.
+  - Map: stops colored green, red or blue.
+  - Done: each finished stop, with an Undo button.
+- **An open stop shows:**
+  - customer history and approximate-location badges, and the time slot
+  - address, landmark, product, notes
+  - the unscheduled reason, if any
+  - Call (`tel:+216…`) and Navigate (Google Maps directions to the lat/lng)
+- **Bottom bar:** Failed and Delivered.
+  - Delivered: cash collected, pre-filled with the amount due. A gap warning appears if it's lower. An optional photo can be added; the phone camera opens directly. The client checks it is an image of 8 MB or less, and the server checks the size and that the bytes are JPEG, PNG or WebP. It's stored under a random name.
+  - Failed: reason (No answer, Not at home, Customer refused, Address not found, Other) and an optional note.
+  - The phone's position is sent if available within 3 seconds. Without GPS, the action is still saved.
+- **Duplicate protection:** the button locks after one tap, and the server answers 409 if the order is no longer open. The app treats that as already saved.
+- **Refresh:** every 30 seconds, so route changes made by dispatch appear.
 
 
-## 14. Frontend routing and network
+## 12. Analytics definitions
 
-- Hash-based routes: `#/import`, `#/dispatch`, `#/driver`, `#/driver/<id>`, `#/analytics`, `#/planner`.
-- The "Delivery day" picker in the header applies to the Import, Dispatch and Driver pages. It defaults to today.
-- The frontend calls the backend at `/api/...`. The Vite dev server forwards these calls to `http://localhost:8000` and removes the `/api` prefix. The `VITE_API_URL` variable can override the base URL.
-- The Vite dev server listens on the local network (`host: true`), so a phone on the same Wi-Fi can open the app.
+Period: 7, 30 or 90 days ending today, by order delivery date. Undone attempts are always excluded.
+
+- **Attempt success:** delivered attempts ÷ all attempts.
+- **First-try delivery:** original orders (not retries) delivered on their first attempt ÷ original orders with at least one attempt.
+- **Eventually delivered:** original orders delivered on any attempt in their retry chain ÷ the same denominator. Chains are followed with a recursive SQL query; a retry is never counted as a new order.
+- **Cash gap:** COD due on delivered orders − cash recorded by drivers.
+
+Charts and tables:
+- attempts per day (delivered vs failed)
+- per driver: attempt success, stops per working day, cash gap
+- per governorate, lowest success first
+- failure reasons
+- phones with 2 or more failed attempts
 
 
-## 15. Current limitations
+## 13. Demo data
 
-- No authentication or user accounts; anyone with the URL can act as admin or any driver.
+`sample_data.seed_demo` runs on first start when there are no drivers.
+
+- **5 drivers:**
+  - three at the Charguia hub covering Grand Tunis governorates
+  - Sousse/Monastir/Mahdia, from a Sousse relay point
+  - Sfax, from a Sfax relay point
+- **Accounts:** one admin and one login per driver.
+- **History:** 21 past days, 28–46 orders per day (more on Mondays).
+  - About 40% of failed orders are retried the next day as linked orders.
+  - Built-in patterns: base failure 10%, +10% in Manouba, +5% in Ben Arous, +6% for one driver, 65% for 12 "risky" phone numbers, and about 2% of deliveries short by 5–20 DT.
+- **Names:** generated. A phone number always has the same name.
+
+
+## 14. API reference
+
+    Auth        POST /auth/login, POST /auth/logout, GET /auth/me, POST /auth/change-password
+    Health      GET  /health
+    Admin       GET  /overview?day=
+                GET  /excel/template, GET /excel/sample?day=
+                POST /orders/validate (form: file, day), POST /orders/revalidate, POST /orders/import
+                GET  /orders?day=, GET /orders/{id}, DELETE /orders?day= (open orders without attempts)
+                POST /dispatch/assign, POST /dispatch/reoptimize, GET /dispatch?day=
+                POST /orders/{id}/reassign, POST /orders/{id}/retry
+                GET  /drivers, POST /drivers, PUT /drivers/{id}, POST /drivers/{id}/password, GET /meta
+                GET  /analytics?days=7|30|90
+                POST /admin/demo/reset
+                POST /optimize-route (Quick planner)
+    Driver      GET  /me/day?day=
+    Owner/admin POST /orders/{id}/deliver (form: cash_collected, lat?, lng?, photo?)
+                POST /orders/{id}/fail, POST /orders/{id}/undo, GET /orders/{id}/photo
+
+Interactive docs: http://localhost:8000/docs
+
+
+## 15. Tests
+
+`python -m pytest -q` in backend/ runs 17 end-to-end API tests. They use a temporary database and no API key, and cover:
+- startup: no duplication on restart; accounts added to old databases
+- auth and roles
+- import errors, revalidation and persistence
+- upload rejection
+- zone, capacity and inactive-driver rules
+- time windows; unscheduled stop explained
+- OR-Tools ≤ nearest neighbour on random instances
+- same-address orders kept distinct
+- reassignment eligibility
+- driver ownership, photo validation, double submit, undo history, idempotent retry and undo lock
+- re-routing keeps finished stops
+- analytics totals checked against SQL; 7-day vs 30-day filter
+- overview attention items
+- Quick planner without a key
+- clearing a day keeps finished orders
+
+
+## 16. Current limitations
+
+- Local demo security only: no HTTPS, rate limiting or password-reset email. The token lives in localStorage. Not suitable for real customer data on a public server.
 - Without an ORS key, travel times are estimates and the map shows straight lines.
-- The city table has about 40 places; elsewhere the governorate centre is used.
-- One depot per driver. No hubs or transfers between cities.
-- No offline mode, live tracking, SMS/WhatsApp messages or deployment setup.
-- Photos are stored on the server's disk. Delivered and failed actions cannot be edited, only undone.
+- The location table holds about 40 places; elsewhere the governorate centre is used.
+- One depot per driver. No hubs, live tracking, SMS/WhatsApp or offline mode.
+- No failure-risk prediction model. Risk is shown with rules: past failed orders per phone.

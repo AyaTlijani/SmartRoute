@@ -24,6 +24,10 @@ from dispatch import _day
 
 router = APIRouter(tags=["Analytics"])
 
+
+def _n(count, one, many=None):
+    return f"{count} {one if count == 1 else (many or one + 's')}"
+
 _ATT = ("FROM attempts a JOIN orders o ON o.id = a.order_id LEFT JOIN drivers d ON d.id = a.driver_id "
         "WHERE a.voided_at IS NULL AND o.delivery_date BETWEEN ? AND ?")
 _RATE = ("SUM(a.result='delivered') AS delivered, SUM(a.result='failed') AS failed, COUNT(*) AS attempts, "
@@ -123,26 +127,26 @@ def overview(day: str = None, _: CurrentUser = Depends(require_admin)):
         attention.append({"level": "info", "title": "No orders for this day yet",
                           "detail": "Import the confirmed-orders Excel file to start.", "to": "/admin/import"})
     if pending:
-        attention.append({"level": "warning", "title": f"{len(pending)} unassigned order(s)",
+        attention.append({"level": "warning", "title": f"{_n(len(pending), 'unassigned order')}",
                           "detail": "Run assignment, or assign them by hand.", "to": "/admin/dispatch"})
     if unscheduled:
-        attention.append({"level": "warning", "title": f"{len(unscheduled)} stop(s) don't fit a route",
+        attention.append({"level": "warning", "title": f"{_n(len(unscheduled), 'stop doesn\'t', 'stops don\'t')} fit a route",
                           "detail": "Their time window can't be met. Move them to another driver or day.",
                           "to": "/admin/dispatch"})
     if failed_open:
-        attention.append({"level": "critical", "title": f"{len(failed_open)} failed delivery(ies) to decide on",
+        attention.append({"level": "critical", "title": f"{_n(len(failed_open), 'failed delivery', 'failed deliveries')} to decide on",
                           "detail": "Schedule a retry or close them.", "to": "/admin/orders?status=failed"})
     if short:
         gap = sum(o["cod_amount"] - (o["cash_collected"] or 0) for o in short)
         attention.append({"level": "critical", "title": f"Cash gap of {gap:.1f} DT",
-                          "detail": f"{len(short)} delivery(ies) collected less than the amount due.",
+                          "detail": f"{_n(len(short), 'delivery', 'deliveries')} collected less than the amount due.",
                           "to": "/admin/orders?status=delivered"})
     if approx:
-        attention.append({"level": "info", "title": f"{len(approx)} order(s) with approximate location",
+        attention.append({"level": "info", "title": f"{_n(len(approx), 'order')} with an approximate location",
                           "detail": "Only the governorate is known; the driver should call first.",
                           "to": "/admin/orders"})
     if risky:
-        attention.append({"level": "info", "title": f"{len(risky)} order(s) from customers who refused before",
+        attention.append({"level": "info", "title": f"{_n(len(risky), 'order')} from customers who refused before",
                           "detail": "Consider calling to re-confirm before dispatch.", "to": "/admin/orders"})
 
     fleet = []

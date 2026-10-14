@@ -10,7 +10,9 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-function createDeliveryIcon(number) {
+const STATUS_COLOR = { delivered: "#047857", failed: "#B91C1C" };
+
+function createDeliveryIcon(number, status) {
   return L.divIcon({
     className: "smartroute-marker",
     html: `
@@ -18,7 +20,7 @@ function createDeliveryIcon(number) {
         width: 38px;
         height: 38px;
         border-radius: 50%;
-        background: #2563eb;
+        background: ${STATUS_COLOR[status] || "#0B65A6"};
         color: #ffffff;
         border: 3px solid #ffffff;
         box-shadow: 0 3px 10px rgba(15, 23, 42, 0.30);
@@ -44,7 +46,7 @@ const depotIcon = L.divIcon({
       width: 42px;
       height: 42px;
       border-radius: 50%;
-      background: #0f172a;
+      background: #0F1C2E;
       color: #ffffff;
       border: 3px solid #ffffff;
       box-shadow: 0 3px 10px rgba(15, 23, 42, 0.32);
@@ -171,6 +173,8 @@ export default function RouteMap({
   stops,
   routeGeometry,
   straightLines = false, // geometry is an estimate, not real roads
+  height = "h-[430px] sm:h-[500px]",
+  bare = false,          // hide the card header/legend when a page already has one
 }) {
   const hasDepot =
     Array.isArray(depot?.coordinates) &&
@@ -226,8 +230,8 @@ export default function RouteMap({
   ];
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-col gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className={bare ? "overflow-hidden" : "overflow-hidden rounded-lg border border-slate-200 bg-white"}>
+      <div className={bare ? "hidden" : "flex flex-col gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between"}>
         <div>
           <h3 className="text-sm font-bold text-slate-900">
             Optimized route map
@@ -276,7 +280,7 @@ export default function RouteMap({
           zoom={14}
           scrollWheelZoom
           zoomControl
-          className="h-[430px] w-full sm:h-[500px]"
+          className={`${height} w-full`}
         >
           <TileLayer
             attribution="&copy; OpenStreetMap contributors"
@@ -301,7 +305,7 @@ export default function RouteMap({
               <Polyline
                 positions={roadRoutePoints}
                 pathOptions={{
-                  color: "#2563eb",
+                  color: "#0B65A6",
                   weight: 5,
                   opacity: 0.95,
                   lineCap: "round",
@@ -319,7 +323,7 @@ export default function RouteMap({
             <Popup>
               <div className="min-w-[220px]">
                 <div className="flex items-center gap-2">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-xs font-bold text-white">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-ink text-xs font-bold text-white">
                     D
                   </span>
 
@@ -376,7 +380,8 @@ export default function RouteMap({
                 <Marker
                   position={marker.display}
                   icon={createDeliveryIcon(
-                    stop.stop_number
+                    stop.stop_number,
+                    stop.status
                   )}
                   zIndexOffset={
                     2000 + Number(stop.stop_number)
@@ -385,12 +390,12 @@ export default function RouteMap({
                   <Popup>
                     <div className="min-w-[240px]">
                       <div className="flex items-center gap-2">
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand text-xs font-bold text-white">
                           {stop.stop_number}
                         </span>
 
                         <div>
-                          <p className="text-[10px] font-bold uppercase tracking-wide text-blue-600">
+                          <p className="text-[10px] font-bold uppercase tracking-wide text-brand">
                             Delivery {stop.stop_number}
                           </p>
 
@@ -412,12 +417,12 @@ export default function RouteMap({
                         </div>
 
                         <div className="grid grid-cols-2 gap-2">
-                          <div className="rounded-lg bg-blue-50 p-2.5">
-                            <p className="text-[9px] font-bold uppercase tracking-wide text-blue-500">
+                          <div className="rounded-lg bg-brand-50 p-2.5">
+                            <p className="text-[9px] font-bold uppercase tracking-wide text-brand">
                               ETA
                             </p>
 
-                            <p className="mt-1 text-xs font-bold text-blue-800">
+                            <p className="mt-1 text-xs font-bold text-brand-700">
                               {stop.arrival_time}
                             </p>
                           </div>
@@ -448,16 +453,16 @@ export default function RouteMap({
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-100 bg-slate-50 px-4 py-3">
+      <div className={bare ? "hidden" : "flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-slate-100 bg-slate-50 px-4 py-3"}>
         <span className="flex items-center gap-2 text-[10px] font-medium text-slate-500">
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[8px] font-bold text-white">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-ink text-[8px] font-bold text-white">
             D
           </span>
           Depot
         </span>
 
         <span className="flex items-center gap-2 text-[10px] font-medium text-slate-500">
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-[8px] font-bold text-white">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand text-[8px] font-bold text-white">
             1
           </span>
           Optimized delivery order
@@ -465,7 +470,7 @@ export default function RouteMap({
 
         {hasRoadRoute && (
           <span className="flex items-center gap-2 text-[10px] font-medium text-slate-500">
-            <span className="h-1 w-7 rounded-full bg-blue-600" />
+            <span className="h-1 w-7 rounded-full bg-brand" />
             {straightLines ? "Route order" : "Actual driving route"}
           </span>
         )}
