@@ -42,6 +42,7 @@ export default function DriverApp() {
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
 
+  useEffect(() => { document.title = "My route · SmartRoute"; }, []);
   const load = () => api.get("/me/day").then((r) => setData(r.data)).catch((e) => setError(errorText(e)));
   useEffect(() => {
     load();

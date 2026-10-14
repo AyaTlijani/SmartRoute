@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Bike, ShieldCheck } from "lucide-react";
 import { errorText } from "../api";
@@ -20,6 +20,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  useEffect(() => { document.title = "Sign in · SmartRoute"; }, []);
 
   if (ready && user) return <Navigate to={homeFor(user)} replace />;
 
@@ -38,7 +39,7 @@ export default function Login() {
   };
 
   return (
-    <div className="grid min-h-screen gap-6 p-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] lg:p-6">
+    <div className="grid min-h-screen grid-cols-[minmax(0,1fr)] gap-6 p-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] lg:p-6">
       <div className="relative hidden overflow-hidden rounded-[2.5rem] bg-gradient-to-br from-[#1FA46A] via-[#16935C] to-[#0D6540] lg:block">
         <RouteArt />
         <div className="relative flex h-full flex-col justify-between p-12">
@@ -62,7 +63,7 @@ export default function Login() {
       </div>
 
       <div className="flex items-center justify-center px-2 py-10">
-        <div className="w-full max-w-md rounded-[2rem] bg-white p-8 shadow-card sm:p-10">
+        <div className="w-full max-w-md rounded-[2rem] bg-white p-6 shadow-card sm:p-10">
           <div className="lg:hidden"><Logo /></div>
           <h1 className="mt-8 text-[28px] font-extrabold tracking-tight lg:mt-0">Welcome back</h1>
           <p className="mt-1 text-sm text-ink-500">Sign in to SmartRoute. Admins and drivers use the same page.</p>

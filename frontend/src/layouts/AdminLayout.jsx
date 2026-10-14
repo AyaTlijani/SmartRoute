@@ -1,12 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
 import {
-  BarChart3, Bell, CalendarDays, ChevronLeft, ChevronRight, FileSpreadsheet, LayoutDashboard, LogOut,
+  AlertTriangle, BarChart3, Bell, CheckCircle2, Info, OctagonAlert, CalendarDays, ChevronLeft, ChevronRight, FileSpreadsheet, LayoutDashboard, LogOut,
   Menu, Package, RotateCcw, Route, Users, X,
 } from "lucide-react";
 import { useAuth } from "../auth";
-import { api, errorText, formatDay, setToken, shiftDay, todayISO } from "../api";
-import { Button, ErrorBanner, HeaderExtrasContext, Modal, cx } from "../components/ui";
+import { api, dt, errorText, formatDay, setToken, shiftDay, todayISO } from "../api";
+import { Button, ErrorBanner, HeaderExtrasContext, Modal, cx, useToast } from "../components/ui";
 
 const NAV = [
   { to: "/admin", label: "Overview", icon: LayoutDashboard, end: true },
@@ -118,41 +118,180 @@ function Sidebar({ onNavigate }) {
   );
 }
 
-// Top-right of every admin page: alerts bell and avatar.
+const LEVEL_ICON = {
+  critical: [OctagonAlert, "bg-red-100 text-red-700"],
+  warning: [AlertTriangle, "bg-amber-100 text-amber-700"],
+  info: [Info, "bg-mint-200 text-brand-700"],
+};
+const SEEN_KEY = "smartroute.seenAlerts";
+const readSeen = () => {
+  try { return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || "[]")); } catch { return new Set(); }
+};
+const writeSeen = (titles) => {
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(titles)); } catch { /* private mode */ }
+};
+
+// Closes a dropdown on outside click or Escape.
+function useDismiss(open, setOpen) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => ref.current && !ref.current.contains(e.target) && setOpen(false);
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  return ref;
+}
+
+// Top-right of every admin page: alerts, live driver updates and the account menu.
 function HeaderExtras() {
-  const { user } = useAuth();
-  const [alerts, setAlerts] = useState(0);
+  const toast = useToast();
+  const [items, setItems] = useState(null);
+  const [seen, setSeen] = useState(readSeen);
+  const [open, setOpen] = useState(false);
+  const known = useRef(null); // last attempt id seen, so only new results make a toast
+  const ref = useDismiss(open, setOpen);
+
   useEffect(() => {
     const load = () => api.get("/overview", { params: { day: todayISO() } })
-      .then((r) => setAlerts(r.data.attention.filter((a) => a.level !== "info").length)).catch(() => {});
+      .then((r) => setItems(r.data.attention)).catch(() => {});
+    // New driver results since the page opened appear as toasts.
+    const poll = () => api.get("/updates", { params: known.current == null ? {} : { after: known.current } }).then((r) => {
+      if (known.current != null && r.data.attempts.length) load();
+      r.data.attempts.forEach((a) => toast(
+        a.result === "delivered"
+          ? `${a.driver} delivered to ${a.customer_name}, ${dt(a.cash_collected)} collected`
+          : `${a.driver} could not deliver to ${a.customer_name}: ${a.reason}`,
+        a.result === "delivered" ? "good" : "warn"));
+      known.current = r.data.latest;
+    }).catch(() => {});
     load();
-    const t = setInterval(load, 30000);
-    return () => clearInterval(t);
+    poll();
+    const t1 = setInterval(poll, 10000);
+    const t2 = setInterval(load, 30000);
+    return () => { clearInterval(t1); clearInterval(t2); };
   }, []);
+
+  const unseen = (items || []).filter((a) => a.level !== "info" && !seen.has(a.title)).length;
+  const toggle = () => {
+    setOpen((o) => !o);
+    if (!open && items) {
+      const titles = items.map((a) => a.title);
+      writeSeen(titles);
+      setSeen(new Set(titles));
+    }
+  };
+
   return (
     <div className="flex items-center gap-3">
-      <Link to="/admin" aria-label={`${alerts} items need attention`}
-        className="relative flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-card hover:bg-mint-50">
-        <Bell className="h-5 w-5 text-ink" />
-        {alerts > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold text-white ring-2 ring-white">
-            {alerts}
-          </span>
+      <div className="relative" ref={ref}>
+        <button type="button" onClick={toggle} aria-expanded={open} aria-haspopup="true"
+          aria-label={unseen ? `${unseen} new alerts` : "Alerts"}
+          className={cx("relative flex h-11 w-11 items-center justify-center rounded-full shadow-card transition-colors",
+            open ? "bg-mint-200" : "bg-white hover:bg-mint-50")}>
+          <Bell className="h-5 w-5 text-ink" />
+          {unseen > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold text-white ring-2 ring-white">
+              {unseen}
+            </span>
+          )}
+        </button>
+        {open && (
+          <div className="absolute right-0 top-14 z-[1500] w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-3xl bg-white shadow-float ring-1 ring-black/5">
+            <div className="flex items-center justify-between px-5 pb-2 pt-4">
+              <p className="font-bold">Needs attention today</p>
+              <span className="rounded-full bg-mint px-2.5 py-0.5 text-xs font-semibold text-brand-700">{items?.length || 0}</span>
+            </div>
+            {!items || items.length === 0 ? (
+              <p className="flex items-center gap-2 px-5 pb-5 pt-2 text-sm text-ink-500">
+                <CheckCircle2 className="h-4 w-4 text-brand" /> Nothing to act on. Every order is planned.
+              </p>
+            ) : (
+              <ul className="max-h-[60vh] overflow-y-auto px-2 pb-2">
+                {items.map((a) => {
+                  const [Icon, tone] = LEVEL_ICON[a.level] || LEVEL_ICON.info;
+                  return (
+                    <li key={a.title}>
+                      <Link to={a.to} onClick={() => setOpen(false)} className="flex items-start gap-3 rounded-2xl px-3 py-2.5 hover:bg-mint-50">
+                        <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-full", tone)}><Icon className="h-4 w-4" /></span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold">{a.title}</span>
+                          <span className="block text-[13px] text-ink-500">{a.detail}</span>
+                        </span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
         )}
-      </Link>
-      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-700 text-sm font-bold text-white shadow-card ring-2 ring-white"
-        title={user?.full_name} aria-hidden="true">
-        {initials(user?.full_name)}
-      </span>
+      </div>
+      <AccountMenu />
     </div>
   );
 }
 
+function AccountMenu() {
+  const { user, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const ref = useDismiss(open, setOpen);
+  const item = "flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium hover:bg-mint-50";
+  return (
+    <div className="relative" ref={ref}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="true" aria-label="Account menu"
+        className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-700 text-sm font-bold text-white shadow-card ring-2 ring-white hover:brightness-110">
+        {initials(user?.full_name)}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-14 z-[1500] w-64 rounded-3xl bg-white p-2 shadow-float ring-1 ring-black/5">
+          <div className="flex items-center gap-3 px-3 py-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand text-sm font-bold text-white">{initials(user?.full_name)}</span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-bold">{user?.full_name}</span>
+              <span className="block text-xs text-ink-500">Administrator, @{user?.username}</span>
+            </span>
+          </div>
+          <div className="my-1 h-px bg-slate-100" />
+          <button type="button" className={item} onClick={() => { setOpen(false); setResetting(true); }}>
+            <RotateCcw className="h-4 w-4 text-brand-700" /> Reset demo data
+          </button>
+          <button type="button" className={item} onClick={logout}>
+            <LogOut className="h-4 w-4 text-brand-700" /> Sign out
+          </button>
+        </div>
+      )}
+      {resetting && <ResetDemo onClose={() => setResetting(false)} />}
+    </div>
+  );
+}
+
+// True on desktop widths, where the bell and avatar sit in the page header;
+// on phones they move to the top bar.
+function useWide() {
+  const q = "(min-width: 1024px)";
+  const [wide, setWide] = useState(() => window.matchMedia(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia(q);
+    const on = () => setWide(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
 export default function AdminLayout() {
   const [day, setDay] = useState(todayISO);
+  const wide = useWide();
   const [open, setOpen] = useState(false);
   const location = useLocation();
   const current = NAV.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)));
+  useEffect(() => {
+    document.title = current ? `${current.label} · SmartRoute` : "SmartRoute";
+  }, [current]);
 
   return (
     <div className="min-h-screen lg:pl-72">
@@ -165,7 +304,7 @@ export default function AdminLayout() {
           <Menu className="h-5 w-5" />
         </button>
         <span className="text-sm font-bold">{current?.label}</span>
-        <span className="w-9" />
+        {!wide && <HeaderExtras />}
       </div>
       {open && (
         <div className="fixed inset-0 z-[1300] lg:hidden">
@@ -181,7 +320,7 @@ export default function AdminLayout() {
       )}
 
       <main className="mx-auto max-w-[1320px] px-4 py-6 sm:px-6 lg:px-10 lg:py-9">
-        <HeaderExtrasContext.Provider value={<HeaderExtras />}>
+        <HeaderExtrasContext.Provider value={wide ? <HeaderExtras /> : null}>
           <Outlet context={{ day, setDay }} />
         </HeaderExtrasContext.Provider>
       </main>

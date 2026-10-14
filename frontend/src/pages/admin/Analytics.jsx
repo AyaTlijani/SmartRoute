@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Banknote, BarChart3, CheckCircle2, PackageCheck, RotateCcw, Wallet } from "lucide-react";
 import { api, dt, errorText, formatDay } from "../../api";
-import { EmptyState, ErrorBanner, IconBadge, Loading, PageHeader, Panel, StatCard, cx } from "../../components/ui";
+import { EmptyState, ErrorBanner, IconBadge, Loading, Skeleton, PageHeader, Panel, StatCard, cx } from "../../components/ui";
 
 const PERIODS = [7, 30, 90];
 
@@ -31,7 +31,7 @@ export default function Analytics() {
           </div>
         } />
       <ErrorBanner error={error} />
-      {!data ? <Loading /> : !data.totals.attempts ? (
+      {!data ? <Skeleton /> : !data.totals.attempts ? (
         <Panel><EmptyState icon={BarChart3} title="No deliveries in this period">Analytics appear once drivers record deliveries.</EmptyState></Panel>
       ) : <Dashboard data={data} />}
     </>
@@ -50,7 +50,7 @@ function Dashboard({ data }) {
   const maxReason = data.reasons[0]?.count || 1;
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard icon={CheckCircle2} label="Attempt success" value={`${t.success_rate}%`} tone="good" detail={`${t.delivered} of ${t.attempts} attempts`} />
         <StatCard icon={PackageCheck} label="First-try delivery" value={`${o.first_try_rate}%`} detail={`of ${o.attempted} orders attempted`} />
         <StatCard icon={RotateCcw} label="Eventually delivered" value={`${o.eventual_rate}%`} detail={`${o.retried} orders needed a retry`} />

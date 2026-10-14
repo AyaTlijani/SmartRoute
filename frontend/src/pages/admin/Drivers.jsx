@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Bike, Car, KeyRound, MapPin, Pencil, Phone, UserPlus, Users } from "lucide-react";
 import { api, errorText } from "../../api";
 import {
-  Button, EmptyState, ErrorBanner, Field, Input, Loading, Modal, PageHeader, Panel, Select, cx, useToast,
+  Button, EmptyState, ErrorBanner, Field, Input, Loading, Skeleton, Modal, PageHeader, Panel, Select, cx, useToast,
 } from "../../components/ui";
 
 export default function Drivers() {
@@ -35,7 +35,7 @@ export default function Drivers() {
         description="Each driver has their own login and only sees their own deliveries. Zones, depot and capacity decide which orders they can get."
         actions={<Button icon={UserPlus} onClick={() => setEditing({})} disabled={!meta}>Add driver</Button>} />
       <ErrorBanner error={error} onClose={() => setError(null)} />
-      {!drivers ? <Loading /> : drivers.length === 0 ? (
+      {!drivers ? <Skeleton layout="cards" /> : drivers.length === 0 ? (
         <Panel><EmptyState icon={Users} title="No drivers yet" action={<Button onClick={() => setEditing({})}>Add driver</Button>} /></Panel>
       ) : (
         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">

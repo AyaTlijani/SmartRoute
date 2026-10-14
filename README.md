@@ -47,7 +47,7 @@ All data lives in a SQLite database file, `backend/smartroute.db`; the pages onl
   - A few orders in regions nobody covers are unassigned.
 - **Tomorrow:** confirmed orders imported but not planned, so you can show **Plan routes** live.
 
-Restarting does not duplicate anything. To restore this state before a demo, use **Reset demo data** at the bottom of the admin sidebar. Opening the file with DB Browser for SQLite shows every table.
+Restarting does not duplicate anything. If the demo was generated on an earlier day, the backend rebuilds it around today when it starts, so "today" is never empty. To restore this state by hand, use **Reset demo data** in the account menu (top right) or at the bottom of the sidebar. Opening the file with DB Browser for SQLite shows every table.
 
 **Demo clock.** By default (`SMARTROUTE_CLOCK=demo`), each driver's time follows their own progress, so the demo behaves like a working day at any hour. Set `SMARTROUTE_CLOCK=real` in `backend/.env` to use the wall clock. Databases from the earlier version are upgraded automatically, and their drivers get the logins above.
 
@@ -119,7 +119,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-There are 22 end-to-end API tests:
+There are 24 end-to-end API tests:
 - roles and login
 - import validation, revalidation and persistence
 - zone, capacity and inactive-driver rules
@@ -133,6 +133,8 @@ There are 22 end-to-end API tests:
 - past days read-only
 - the driver's day: start, end, cash handover and its confirmation
 - re-planning from the current time and position
+- demo reset and the automatic rebuild of an out-of-date demo
+- live driver updates for the admin
 - started drivers keep their stops
 - the fleet optimizer respects zones and capacity, and drives no more than the zone rule
 - the lived-in demo: driver states, a cash handover waiting, tomorrow's orders, closed past days, and route legs kept for finished stops

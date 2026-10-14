@@ -13,6 +13,8 @@ The endpoints live in:
 """
 
 import logging
+import os
+from datetime import date
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,13 +55,32 @@ app.add_middleware(
 )
 
 
+def _demo_is_stale(conn) -> bool:
+    """True when the demo data was generated on an earlier day.
+
+    The demo is built around the day it was generated ("today" in progress,
+    tomorrow to plan). Opened a week later, today would be empty, so the
+    demo is rebuilt. Turned off with SMARTROUTE_DEMO_REFRESH=0, and never
+    applies with the real clock (SMARTROUTE_CLOCK=real).
+    """
+    if os.getenv("SMARTROUTE_DEMO_REFRESH", "1") == "0" or os.getenv("SMARTROUTE_SEED_TODAY", "1") == "0":
+        return False
+    if os.getenv("SMARTROUTE_CLOCK", "demo").strip().lower() == "real":
+        return False
+    latest = conn.execute("SELECT MAX(delivery_date) FROM orders").fetchone()[0]
+    return latest is not None and latest < date.today().isoformat()
+
+
 @app.on_event("startup")
 def _startup() -> None:
-    """Create tables; load demo data on first run only."""
+    """Create tables; load demo data on first run or when it is out of date."""
     init_db()
     with connect() as conn:
         if conn.execute("SELECT COUNT(*) FROM drivers").fetchone()[0] == 0:
             logger.info("Empty database: loading demo data")
+            sample_data.seed_demo(conn)
+        elif _demo_is_stale(conn):
+            logger.info("Demo data is from an earlier day: rebuilding it around today")
             sample_data.seed_demo(conn)
         sample_data.ensure_accounts(conn)
 

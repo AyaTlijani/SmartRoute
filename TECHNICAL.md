@@ -274,6 +274,13 @@ Results are in `backend/evaluation_results.md`.
 
 The sidebar holds Overview, Import orders, Dispatch, Orders, Drivers and Analytics. Overview, Import, Dispatch and Orders share a day picker (previous/next/today). On a past day, Import and Dispatch are read-only, but cash handovers can still be confirmed.
 
+**Every admin page** has, at the top right (in the top bar on phones):
+- **Bell:** a dropdown of today's "Needs attention" items, each linking to the right page. The red count shows warning and critical items not seen yet; opening the dropdown marks them seen (stored in the browser), and an item whose count changes shows as new again.
+- **Account menu:** name and role, Reset demo data, Sign out.
+- **Live updates:** `GET /updates?after=<attempt id>` is polled every 10 seconds; each new delivery or failure recorded by a driver appears as a toast ("Sami Ben Ali delivered to …"). The first call only returns the latest id, so opening a page never replays old results.
+
+Pages show grey placeholders in the shape of their content while loading, and the browser tab shows the page name.
+
 **Overview** (`GET /overview?day=`):
 - Order counts, completion %, delivered-on-attempt %, cash collected vs expected, active drivers.
 - **Needs attention** items, each linking to the right page:
@@ -285,6 +292,7 @@ The sidebar holds Overview, Import orders, Dispatch, Orders, Drivers and Analyti
   - cash gap
   - approximate locations
   - customers who refused before
+- Charts: cash collected over the last 7 days, orders by status, and the share of today's attempts delivered.
 - Per-driver progress bars, return time, and the last 8 driver updates.
 - Refreshes every 20 seconds.
 
@@ -298,11 +306,11 @@ The sidebar holds Overview, Import orders, Dispatch, Orders, Drivers and Analyti
 - Refreshes every 15 seconds.
 
 **Orders**:
-- The day's orders, with status tabs and search by name, phone, city or id.
+- The day's orders. Count cards per status (all, unassigned, to deliver, delivered, failed) act as filters; search by name, phone, city or id. The table header stays visible while scrolling.
 - Clicking an order opens its detail: fields, location precision, customer history, unscheduled reason, retry links, every attempt including undone ones (struck through), the proof photo (loaded through the authenticated endpoint), and "Retry next day" for failed orders.
 
 **Drivers**:
-- List with login, zones, depot, today's load / capacity, all-time delivered %, and an active switch.
+- One card per driver with login, zones, depot, phone, vehicle, today's load / capacity, all-time delivered %, and an active switch.
 - Add driver creates the driver and their login (username + temporary password). Edit changes name, phone, vehicle, capacity, depot (from a preset list) and zones (24 checkboxes). Password sets a new password.
 
 **Analytics**: see section 12.
@@ -394,6 +402,8 @@ All data is stored in the SQLite database (section 4). `sample_data.seed_demo` (
 - **Tomorrow:** 46 confirmed orders imported as pending, ready for **Plan routes**.
 - **Names:** generated. A phone number always has the same name.
 
+**Out-of-date demo.** The demo is built around the day it was generated. When the backend starts and the newest order is from an earlier day, the demo is rebuilt around today, so a demo opened a week later still has a day in progress. This only happens with the demo clock; `SMARTROUTE_DEMO_REFRESH=0` turns it off.
+
 The tests seed without today and tomorrow (`SMARTROUTE_SEED_TODAY=0`), so every test starts from a clean day.
 
 **Clock** (`clock.py`): times inside the planner are minutes after 9:00.
@@ -405,7 +415,7 @@ The tests seed without today and tomorrow (`SMARTROUTE_SEED_TODAY=0`), so every 
 
     Auth        POST /auth/login, POST /auth/logout, GET /auth/me, POST /auth/change-password
     Health      GET  /health
-    Admin       GET  /overview?day=
+    Admin       GET  /overview?day=, GET /updates?after=
                 GET  /excel/template, GET /excel/sample?day=
                 POST /orders/validate (form: file, day), POST /orders/revalidate, POST /orders/import
                 GET  /orders?day=, GET /orders/{id}, DELETE /orders?day= (open orders without attempts)
@@ -424,7 +434,7 @@ Interactive docs: http://localhost:8000/docs
 
 ## 15. Tests
 
-`python -m pytest -q` in backend/ runs 22 end-to-end API tests. They use a temporary database and no API key, and cover:
+`python -m pytest -q` in backend/ runs 24 end-to-end API tests. They use a temporary database and no API key, and cover:
 - startup: no duplication on restart; accounts added to old databases
 - auth and roles
 - import errors, revalidation and persistence
@@ -445,6 +455,8 @@ Interactive docs: http://localhost:8000/docs
 - the fleet optimizer respects zones and capacity, and drives no more than the zone rule
 - the lived-in demo: driver states, a cash handover waiting, tomorrow's orders, closed past days, and legs kept for finished stops
 - clearing a day keeps finished orders
+- demo reset after a confirmed cash handover; out-of-date demo detection
+- live updates return only attempts recorded after a given id
 
 
 ## 16. Current limitations

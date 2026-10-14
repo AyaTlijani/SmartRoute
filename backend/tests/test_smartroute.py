@@ -397,6 +397,35 @@ def test_driver_day_start_end_and_cash_handover(client, admin):
     assert client.post(url, json={"cash_received": 95}, headers=admin).status_code == 409    # once
     fleet = client.get("/overview", headers=admin).json()["fleet"]
     assert next(f for f in fleet if f["id"] == drv["id"])["state"] == "reconciled"
+    # Resetting the demo still works once a handover points at the admin account.
+    assert client.post("/admin/demo/reset", headers=admin).status_code == 200
+
+
+def test_updates_returns_only_new_attempts(client, admin):
+    start = client.get("/updates", headers=admin).json()
+    assert start["attempts"] == []
+    client.post("/orders/import", headers=admin, json={"day": TODAY, "rows": [row(customer_name="Nadia", phone="22100009")]})
+    client.post("/dispatch/plan", json={"day": TODAY}, headers=admin)
+    drv = next(d for d in client.get("/dispatch", headers=admin).json()["drivers"] if d["orders"])
+    me = login(client, drv["name"].split()[0].lower(), "driver123")
+    client.post("/me/start", headers=me)
+    r = client.post(f"/orders/{drv['orders'][0]['id']}/fail", json={"reason": "No answer"}, headers=me)
+    assert r.status_code == 200, r.text
+    new = client.get("/updates", params={"after": start["latest"]}, headers=admin).json()
+    assert [a["customer_name"] for a in new["attempts"]] == ["Nadia"] and new["latest"] > start["latest"]
+    assert client.get("/updates", headers=me).status_code == 403
+
+
+def test_out_of_date_demo_is_detected(client, monkeypatch):
+    monkeypatch.setenv("SMARTROUTE_SEED_TODAY", "1")
+    with db.connect() as conn:
+        conn.execute("UPDATE orders SET delivery_date = '2020-01-01'")
+        assert main._demo_is_stale(conn)
+        monkeypatch.setenv("SMARTROUTE_DEMO_REFRESH", "0")
+        assert not main._demo_is_stale(conn)
+        monkeypatch.delenv("SMARTROUTE_DEMO_REFRESH")
+        conn.execute("UPDATE orders SET delivery_date = ?", (TODAY,))
+        assert not main._demo_is_stale(conn)
 
 
 def test_replan_from_current_position_and_time(client, admin, monkeypatch):

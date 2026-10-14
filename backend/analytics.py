@@ -92,6 +92,24 @@ def analytics(days: int = 30, _: CurrentUser = Depends(require_admin)):
         }
 
 
+@router.get("/updates")
+def updates(after: int = None, _: CurrentUser = Depends(require_admin)):
+    """Delivery attempts recorded after attempt id `after`, newest last.
+
+    Without `after`, returns only the latest id, so a page that just opened
+    starts from now and does not replay old deliveries.
+    """
+    with connect() as conn:
+        latest = conn.execute("SELECT COALESCE(MAX(id), 0) FROM attempts").fetchone()[0]
+        if after is None:
+            return {"latest": latest, "attempts": []}
+        found = rows(conn, """
+            SELECT a.id, a.result, a.reason, a.cash_collected, o.customer_name, d.name AS driver
+            FROM attempts a JOIN orders o ON o.id = a.order_id LEFT JOIN drivers d ON d.id = a.driver_id
+            WHERE a.id > ? AND a.voided_at IS NULL ORDER BY a.id LIMIT 5""", (after,))
+        return {"latest": latest, "attempts": found}
+
+
 @router.get("/overview")
 def overview(day: str = None, _: CurrentUser = Depends(require_admin)):
     """What is happening today, and what needs attention."""

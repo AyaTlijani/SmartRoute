@@ -88,11 +88,11 @@ export function Metric({ label, value, detail, tone, icon }) {
 export function StatCard({ label, value, detail, icon, tone }) {
   const tones = { good: "text-brand", bad: "text-red-700", warn: "text-amber-700" };
   return (
-    <div className="flex items-center gap-4 rounded-3xl border border-white/60 bg-white px-5 py-4 shadow-card">
-      {icon && <IconBadge icon={icon} tone={tone === "warn" ? "sun" : tone === "bad" ? "red" : "mint"} />}
+    <div className="flex min-w-0 items-center gap-4 rounded-3xl border border-white/60 bg-white px-4 py-4 shadow-card sm:px-5">
+      {icon && <span className="hidden sm:block"><IconBadge icon={icon} tone={tone === "warn" ? "sun" : tone === "bad" ? "red" : "mint"} /></span>}
       <div className="min-w-0">
         <p className="text-[13px] font-medium text-ink-500">{label}</p>
-        <p className={cx("text-2xl font-extrabold leading-tight tabular", tones[tone] || "text-ink")}>{value}</p>
+        <p className={cx("break-words text-xl font-extrabold leading-tight tabular sm:text-2xl", tones[tone] || "text-ink")}>{value}</p>
         {detail && <p className="text-xs leading-snug text-ink-500">{detail}</p>}
       </div>
     </div>
@@ -173,6 +173,41 @@ export function Select({ children, ...props }) {
 
 export function Spinner({ className }) {
   return <Loader2 className={cx("h-4 w-4 animate-spin", className)} aria-hidden="true" />;
+}
+
+// Grey placeholders in the shape of the page, shown while data loads.
+const Bone = ({ className }) => <div className={cx("animate-pulse rounded-3xl bg-white/80 shadow-card", className)} />;
+export function Skeleton({ layout = "dashboard" }) {
+  const stats = (n) => (
+    <div className={cx("grid gap-4 sm:grid-cols-2", n === 5 ? "xl:grid-cols-5" : n === 3 ? "sm:grid-cols-3" : "xl:grid-cols-4")}>
+      {Array.from({ length: n }, (_, i) => <Bone key={i} className="h-[92px]" />)}
+    </div>
+  );
+  return (
+    <div className="space-y-6" role="status" aria-label="Loading">
+      {layout === "dashboard" && <>
+        {stats(4)}
+        <div className="grid gap-6 lg:grid-cols-[1.7fr_1fr]"><Bone className="h-[320px]" /><Bone className="h-[320px]" /></div>
+        <div className="grid gap-6 lg:grid-cols-2"><Bone className="h-[260px]" /><Bone className="h-[260px]" /></div>
+      </>}
+      {layout === "dispatch" && <>
+        {stats(5)}
+        <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+          <div className="space-y-3">{[0, 1, 2, 3].map((i) => <Bone key={i} className="h-[110px]" />)}</div>
+          <Bone className="h-[560px]" />
+        </div>
+      </>}
+      {layout === "cards" && (
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2, 3, 4, 5].map((i) => <Bone key={i} className="h-[380px]" />)}</div>
+      )}
+      {layout === "table" && (
+        <div className="rounded-3xl bg-white p-5 shadow-card">
+          <div className="mb-3 h-10 animate-pulse rounded-xl bg-mint" />
+          {Array.from({ length: 8 }, (_, i) => <div key={i} className="mb-2 h-12 animate-pulse rounded-xl bg-slate-100/70" />)}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function Loading({ label = "Loading" }) {
@@ -290,7 +325,7 @@ export function ToastProvider({ children }) {
         {toasts.map((t) => {
           const Icon = icons[t.tone] || Info;
           return (
-            <div key={t.id} className="pointer-events-auto flex items-start gap-2 rounded-md bg-ink px-4 py-3 text-sm text-white shadow-lg">
+            <div key={t.id} className="pointer-events-auto flex items-start gap-2.5 rounded-2xl bg-ink px-4 py-3 text-sm font-medium text-white shadow-float">
               <Icon className={cx("mt-0.5 h-4 w-4 shrink-0", t.tone === "bad" ? "text-red-300" : t.tone === "warn" ? "text-amber-300" : "text-emerald-300")} />
               <span>{t.message}</span>
             </div>

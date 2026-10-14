@@ -7,7 +7,7 @@ import { api, dt, errorText, formatDay } from "../../api";
 import { useAuth } from "../../auth";
 import { DayPicker, useDay } from "../../layouts/AdminLayout";
 import { AreaChart, BarChart, Donut, Sparkline } from "../../components/charts";
-import { Button, DayStateBadge, EmptyState, ErrorBanner, IconBadge, Loading, PageHeader, Panel, cx } from "../../components/ui";
+import { Button, DayStateBadge, EmptyState, ErrorBanner, IconBadge, Loading, Skeleton, PageHeader, Panel, cx } from "../../components/ui";
 
 const LEVEL = {
   critical: { icon: OctagonAlert, tone: "red" },
@@ -39,7 +39,7 @@ export default function Overview() {
     <>
       <PageHeader title={`Welcome back, ${(user?.full_name || "").split(" ")[0]}`} actions={<DayPicker />} />
       <ErrorBanner error={error} />
-      {!data ? <Loading /> : <Body data={data} />}
+      {!data ? <Skeleton /> : <Body data={data} />}
     </>
   );
 }

@@ -8,7 +8,7 @@ import { DayPicker, useDay } from "../../layouts/AdminLayout";
 import RouteMap from "../../components/RouteMap";
 import OrderDetail from "../../components/OrderDetail";
 import {
-  Button, CustomerBadge, DayStateBadge, EmptyState, ErrorBanner, Input, Loading, Modal,
+  Button, CustomerBadge, DayStateBadge, EmptyState, ErrorBanner, Input, Loading, Skeleton, Modal,
   PageHeader, Panel, PrecisionBadge, StatCard, StatusBadge, cx, dayStateOf, useToast,
 } from "../../components/ui";
 
@@ -70,7 +70,7 @@ export default function Dispatch() {
     run(`order${orderId}`, () => api.post(`/orders/${orderId}/reassign`, { driver_id: driverId ? Number(driverId) : null }),
       driverId ? "Order moved; both routes re-planned" : "Order moved back to unassigned");
 
-  if (!data) return <><PageHeader title="Dispatch" actions={<DayPicker />} /><ErrorBanner error={error} /><Loading /></>;
+  if (!data) return <><PageHeader title="Dispatch" actions={<DayPicker />} /><ErrorBanner error={error} /><Skeleton layout="dispatch" /></>;
 
   const all = data.drivers.flatMap((d) => d.orders);
   const total = all.length + data.unassigned.length;

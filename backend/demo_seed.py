@@ -163,7 +163,7 @@ def seed(conn, drivers_spec, admin_login, driver_password, make_order, risky_pho
     from sample_data import CITY_WEIGHTS  # noqa: F401  (same generator as the Excel samples)
 
     _ensure_photos()
-    for table in ("sessions", "users", "driver_days", "attempts", "routes", "orders", "drivers"):
+    for table in ("sessions", "driver_days", "users", "attempts", "routes", "orders", "drivers"):
         conn.execute(f"DELETE FROM {table}")
     conn.execute("DELETE FROM sqlite_sequence")
 
