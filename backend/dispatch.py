@@ -1,50 +1,45 @@
 """
-dispatch.py — The daily delivery workflow.
+dispatch.py — Orders and the delivery day.
 
-    Excel upload → validate → import → assign to drivers → route each
-    driver with OR-Tools → driver marks delivered / failed → retry
+    Excel upload → validate → import → plan routes (planning.py)
+    → driver marks delivered / failed → retry
+
+Rules that apply everywhere:
+    - Past days are read-only: no import, planning or reassignment.
+    - Drivers act only on their own orders, only today, and only after
+      starting their route (driver_day.py).
 
 Who can call what:
-    admin   everything in this file
+    admin   everything here except /me/day
     driver  /me/day, and deliver / fail / undo / photo on their own orders
 """
 
 import json
-import math
 import os
 import uuid
-from datetime import date, datetime, timedelta, timezone
-from typing import List, Optional
+from datetime import date, datetime, timedelta
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
+import planning
 import sample_data
 from auth import CurrentUser, current_user, require_admin, require_driver
 from db import connect, rows
-from distance import road_route_for_coordinates, time_matrix_for_coordinates
 from orders_import import insert_orders, read_excel, validate_rows
-from route_eval import nearest_neighbour, simulate
-from vrptw_solver import _minutes_to_time_str as clock
-from vrptw_solver import solve_vrptw
+from planning import SLOT_LABELS, day_counts, eligibility, route_all, zones_of
 
 router = APIRouter()
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# Working day and slots, in minutes after 9:00 AM (same as the original planner).
-DAY_END = 540                       # 6:00 PM, driver back at the depot
-SLOT_WINDOWS = {0: (0, 480), 1: (0, 180), 2: (240, 480)}
-SLOT_LABELS = {0: "Any time", 1: "Morning", 2: "Afternoon"}
-SERVICE_MINUTES = 10
-
 MAX_EXCEL_BYTES = 5 * 1024 * 1024
 MAX_EXCEL_ROWS = 2000
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
 FAIL_REASONS = ["No answer", "Not at home", "Customer refused", "Address not found", "Other"]
 
 
@@ -57,14 +52,13 @@ def _day(value: Optional[str]) -> str:
         raise HTTPException(400, f"Invalid date '{value}', use YYYY-MM-DD")
 
 
-def _km(lat1, lng1, lat2, lng2):
-    x = math.radians(lng2 - lng1) * math.cos(math.radians((lat1 + lat2) / 2))
-    y = math.radians(lat2 - lat1)
-    return 6371 * math.hypot(x, y)
+def _editable(d: str) -> None:
+    if d < date.today().isoformat():
+        raise HTTPException(400, "Past days are read-only.")
 
 
-def _zones(driver) -> List[str]:
-    return [z.strip() for z in driver["zones"].split(",") if z.strip()]
+def _now() -> str:
+    return datetime.now().isoformat(sep=" ", timespec="seconds")
 
 
 # ============================================================================
@@ -95,13 +89,20 @@ def excel_sample(day: Optional[str] = None, _: CurrentUser = Depends(require_adm
 # IMPORT (admin)
 # ============================================================================
 
+def _validation_response(results, d):
+    return {
+        "day": d,
+        "rows": results,
+        "summary": {k: sum(r["status"] == k for r in results) for k in ("ok", "warning", "error")}
+        | {"total": len(results)},
+    }
+
+
 @router.post("/orders/validate", tags=["Orders"])
-async def orders_validate(
-    file: UploadFile = File(...),
-    day: Optional[str] = Form(None),
-    _: CurrentUser = Depends(require_admin),
-):
+async def orders_validate(file: UploadFile = File(...), day: Optional[str] = Form(None),
+                          _: CurrentUser = Depends(require_admin)):
     d = _day(day)
+    _editable(d)
     if not (file.filename or "").lower().endswith(".xlsx"):
         raise HTTPException(400, "Upload an Excel .xlsx file.")
     content = await file.read(MAX_EXCEL_BYTES + 1)
@@ -135,22 +136,10 @@ def orders_revalidate(req: RowsRequest, _: CurrentUser = Depends(require_admin))
         return _validation_response(validate_rows(req.rows, d, conn), d)
 
 
-def _validation_response(results, d):
-    return {
-        "day": d,
-        "rows": results,
-        "summary": {
-            "total": len(results),
-            "ok": sum(r["status"] == "ok" for r in results),
-            "warning": sum(r["status"] == "warning" for r in results),
-            "error": sum(r["status"] == "error" for r in results),
-        },
-    }
-
-
 @router.post("/orders/import", tags=["Orders"])
 def orders_import(req: RowsRequest, _: CurrentUser = Depends(require_admin)):
     d = _day(req.day)
+    _editable(d)
     with connect() as conn:
         checked = validate_rows(req.rows, d, conn)  # never trust the client
         good = [r["data"] for r in checked if not r["errors"]]
@@ -158,284 +147,43 @@ def orders_import(req: RowsRequest, _: CurrentUser = Depends(require_admin)):
     return {"day": d, "imported": inserted, "rejected": len(checked) - inserted}
 
 
-@router.get("/orders", tags=["Orders"])
-def list_orders(day: Optional[str] = None, _: CurrentUser = Depends(require_admin)):
-    with connect() as conn:
-        return rows(conn, f"SELECT {_ORDER_FIELDS}, d.name AS driver_name FROM orders o "
-                          "LEFT JOIN drivers d ON d.id = o.driver_id "
-                          "WHERE o.delivery_date = ? ORDER BY o.id", (_day(day),))
-
-
-@router.get("/orders/{order_id}", tags=["Orders"])
-def order_detail(order_id: int, _: CurrentUser = Depends(require_admin)):
-    """One order with its full attempt history (undone attempts included)."""
-    with connect() as conn:
-        found = rows(conn, f"SELECT {_ORDER_FIELDS}, d.name AS driver_name FROM orders o "
-                           "LEFT JOIN drivers d ON d.id = o.driver_id WHERE o.id = ?", (order_id,))
-        if not found:
-            raise HTTPException(404, "Order not found")
-        o = found[0]
-        o["slot_label"] = SLOT_LABELS.get(o["slot"] or 0)
-        o["attempts"] = rows(conn, "SELECT a.*, d.name AS driver_name FROM attempts a "
-                                   "LEFT JOIN drivers d ON d.id = a.driver_id WHERE a.order_id = ? ORDER BY a.id",
-                             (order_id,))
-        for a in o["attempts"]:
-            a["has_photo"] = bool(a.pop("photo_path"))
-        return o
-
-
-@router.delete("/orders", tags=["Orders"])
-def clear_day(day: Optional[str] = None, _: CurrentUser = Depends(require_admin)):
-    """Remove a day's orders that are not finished yet. Finished ones stay."""
-    d = _day(day)
-    with connect() as conn:
-        n = conn.execute(
-            "DELETE FROM orders WHERE delivery_date = ? AND status IN ('pending','assigned') "
-            "AND id NOT IN (SELECT order_id FROM attempts)", (d,)).rowcount
-        conn.execute("DELETE FROM routes WHERE delivery_date = ?", (d,))
-        _route_all(conn, d)
-    return {"deleted": n}
-
-
-# ============================================================================
-# ASSIGNMENT
-# ============================================================================
-
-def _day_counts(conn, d):
-    return {r["driver_id"]: r["n"] for r in conn.execute(
-        "SELECT driver_id, COUNT(*) n FROM orders WHERE delivery_date = ? AND driver_id IS NOT NULL "
-        "GROUP BY driver_id", (d,))}
-
-
-def _eligibility(driver, governorate, count) -> Optional[str]:
-    """None if the driver can take an order in this governorate, else why not."""
-    if not driver["active"]:
-        return f"{driver['name']} is inactive"
-    if governorate not in _zones(driver):
-        return f"{driver['name']} does not cover {governorate}"
-    if count >= driver["max_orders"]:
-        return f"{driver['name']} is full ({driver['max_orders']} orders)"
-    return None
-
-
-def _assign_pending(conn, d: str) -> int:
-    """
-    Rule-based assignment:
-
-      1. Eligible = active, covers the order's governorate, under max_orders.
-      2. Among eligible drivers, lowest score wins:
-             orders already assigned that day
-           + 0.5 × km from the order to the driver's current stops
-             (their average position, or the depot when they have none)
-         so loads stay balanced and each driver's stops stay together.
-    """
-    drivers = rows(conn, "SELECT * FROM drivers")
-    counts = _day_counts(conn, d)
-    for drv in drivers:
-        mine = rows(conn, "SELECT lat, lng FROM orders WHERE delivery_date = ? AND driver_id = ?", (d, drv["id"]))
-        drv["count"] = counts.get(drv["id"], 0)
-        drv["sum_lat"] = sum(o["lat"] for o in mine)
-        drv["sum_lng"] = sum(o["lng"] for o in mine)
-
-    assigned = 0
-    pending = rows(conn, "SELECT id, governorate, lat, lng FROM orders "
-                         "WHERE delivery_date = ? AND status = 'pending' ORDER BY governorate, lat", (d,))
-    for o in pending:
-        best, best_score = None, None
-        for drv in drivers:
-            if _eligibility(drv, o["governorate"], drv["count"]):
-                continue
-            if drv["count"]:
-                c_lat, c_lng = drv["sum_lat"] / drv["count"], drv["sum_lng"] / drv["count"]
-            else:
-                c_lat, c_lng = drv["depot_lat"], drv["depot_lng"]
-            score = drv["count"] + 0.5 * _km(o["lat"], o["lng"], c_lat, c_lng)
-            if best_score is None or score < best_score:
-                best, best_score = drv, score
-        if best:
-            conn.execute("UPDATE orders SET driver_id = ?, status = 'assigned' WHERE id = ?", (best["id"], o["id"]))
-            best["count"] += 1
-            best["sum_lat"] += o["lat"]
-            best["sum_lng"] += o["lng"]
-            assigned += 1
-    return assigned
-
-
-def _unassigned_reason(conn, order, drivers, counts) -> str:
-    covering = [d for d in drivers if order["governorate"] in _zones(d)]
-    if not covering:
-        return f"No driver covers {order['governorate']}"
-    if not any(d["active"] for d in covering):
-        return f"All drivers covering {order['governorate']} are inactive"
-    return f"All drivers covering {order['governorate']} are full"
-
-
-# ============================================================================
-# ROUTING (one driver at a time, with the existing OR-Tools solver)
-# ============================================================================
-
-def _why_unscheduled(j, matrix, window, slot) -> str:
-    start, end = window
-    direct = matrix[0][j]
-    if direct > end:
-        return (f"Too far to reach in its {SLOT_LABELS[slot].lower()} window: "
-                f"{direct} min from the depot, window closes at {clock(end)}.")
-    if direct + SERVICE_MINUTES + matrix[j][0] > DAY_END:
-        return "Can't reach it and return to the depot within the working day (9:00 AM–6:00 PM)."
-    return (f"The route is full in its {SLOT_LABELS[slot].lower()} window "
-            f"({clock(start)}–{clock(end)}): other stops use all the time.")
-
-
-def _route_driver(conn, drv: dict, d: str) -> None:
-    """
-    Recompute one driver's route for one day.
-
-    Only open stops (status 'assigned') are routed. Delivered and failed
-    orders keep their stop number and history; they are never touched here.
-    """
-    stops = rows(conn, "SELECT id, lat, lng, slot, customer_name FROM orders "
-                       "WHERE delivery_date = ? AND driver_id = ? AND status = 'assigned' ORDER BY id",
-                 (d, drv["id"]))
-    conn.execute("UPDATE orders SET stop_number = NULL, eta = NULL, unscheduled_reason = NULL "
-                 "WHERE delivery_date = ? AND driver_id = ? AND status = 'assigned'", (d, drv["id"]))
-    conn.execute("DELETE FROM routes WHERE driver_id = ? AND delivery_date = ?", (drv["id"], d))
-    if not stops:
-        return
-
-    # Finished stops keep their numbers; new numbering continues after them.
-    done = conn.execute("SELECT COALESCE(MAX(stop_number), 0) FROM orders WHERE delivery_date = ? "
-                        "AND driver_id = ? AND status IN ('delivered','failed')", (d, drv["id"])).fetchone()[0]
-
-    coords = [[drv["depot_lng"], drv["depot_lat"]]] + [[s["lng"], s["lat"]] for s in stops]
-    slots = [0] + [s["slot"] or 0 for s in stops]
-    windows = [(0, DAY_END)] + [SLOT_WINDOWS[s] for s in slots[1:]]
-    matrix, source = time_matrix_for_coordinates(coords)
-
-    solution = solve_vrptw({
-        "time_matrix": matrix,
-        "time_windows": windows,
-        "slots": slots,
-        "num_vehicles": 1,
-        "depot": 0,
-        "service_time": SERVICE_MINUTES,
-        "addresses": ["depot"] + [s["customer_name"] for s in stops],
-        "drop_penalty": 100_000,          # skip a stop rather than fail the route
-        "time_limit_seconds": 1 if len(stops) <= 8 else 2,
-    }) or []
-
-    visited = [st["node"] for st in solution]
-    for st in solution:
-        conn.execute("UPDATE orders SET stop_number = ?, eta = ? WHERE id = ?",
-                     (done + st["stop_number"], st["arrival_time"], stops[st["node"] - 1]["id"]))
-    for j in range(1, len(stops) + 1):
-        if j not in visited:
-            conn.execute("UPDATE orders SET unscheduled_reason = ? WHERE id = ?",
-                         (_why_unscheduled(j, matrix, windows[j], slots[j]), stops[j - 1]["id"]))
-    if not visited:
-        return
-
-    # Score the optimized route and a nearest-neighbour baseline on the same matrix.
-    optimized = simulate(visited, matrix, windows, SERVICE_MINUTES)
-    baseline = simulate(nearest_neighbour(matrix, range(1, len(stops) + 1)), matrix, windows, SERVICE_MINUTES)
-
-    # Route policy: start and end at the depot.
-    path = [coords[0]] + [coords[j] for j in visited] + [coords[0]]
-    geometry, meters, _, route_source = road_route_for_coordinates(path)
-    conn.execute(
-        "INSERT INTO routes (driver_id, delivery_date, geometry, distance_km, driving_minutes, source, "
-        "end_time, baseline_minutes, baseline_late) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (drv["id"], d, json.dumps(geometry), round(meters / 1000, 1), optimized["travel_minutes"],
-         "ors" if source == route_source == "ors" else "estimate",
-         clock(optimized["end_minutes"]), baseline["travel_minutes"], baseline["late_stops"]),
-    )
-
-
-def _route_all(conn, d: str, driver_ids=None) -> None:
-    for drv in rows(conn, "SELECT * FROM drivers"):
-        if driver_ids is None or drv["id"] in driver_ids:
-            _route_driver(conn, drv, d)
-
-
-class DayRequest(BaseModel):
-    day: Optional[str] = None
-
-
-@router.post("/dispatch/assign", tags=["Dispatch"])
-def dispatch_assign(req: DayRequest, _: CurrentUser = Depends(require_admin)):
-    """Assign pending orders, then recompute every driver's route."""
-    d = _day(req.day)
-    with connect() as conn:
-        n = _assign_pending(conn, d)
-        _route_all(conn, d)
-    return {**_dispatch_view(d), "assigned_now": n}
-
-
-@router.post("/dispatch/reoptimize", tags=["Dispatch"])
-def dispatch_reoptimize(req: DayRequest, _: CurrentUser = Depends(require_admin)):
-    d = _day(req.day)
-    with connect() as conn:
-        _route_all(conn, d)
-    return _dispatch_view(d)
-
-
-class ReassignRequest(BaseModel):
-    driver_id: Optional[int] = None  # None → back to unassigned
-
-
-@router.post("/orders/{order_id}/reassign", tags=["Dispatch"])
-def reassign(order_id: int, req: ReassignRequest, _: CurrentUser = Depends(require_admin)):
-    with connect() as conn:
-        o = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
-        if not o:
-            raise HTTPException(404, "Order not found")
-        if o["status"] not in ("pending", "assigned"):
-            raise HTTPException(400, "This order is already finished.")
-        if req.driver_id is not None and req.driver_id != o["driver_id"]:
-            drv = conn.execute("SELECT * FROM drivers WHERE id = ?", (req.driver_id,)).fetchone()
-            if not drv:
-                raise HTTPException(404, "Driver not found")
-            why = _eligibility(drv, o["governorate"], _day_counts(conn, o["delivery_date"]).get(drv["id"], 0))
-            if why:
-                raise HTTPException(400, f"Can't assign: {why}.")
-        conn.execute("UPDATE orders SET driver_id = ?, status = ?, stop_number = NULL, eta = NULL, "
-                     "unscheduled_reason = NULL WHERE id = ?",
-                     (req.driver_id, "assigned" if req.driver_id else "pending", order_id))
-        _route_all(conn, o["delivery_date"], {o["driver_id"], req.driver_id})
-    return _dispatch_view(o["delivery_date"])
-
-
 # ============================================================================
 # READ MODELS
 # ============================================================================
 
 # Latest non-voided attempt + customer history + retry link, for every order.
-_ORDER_FIELDS = """
+_LAST = "FROM attempts a WHERE a.order_id = o.id AND a.voided_at IS NULL ORDER BY a.id DESC LIMIT 1"
+_ORDER_FIELDS = f"""
     o.*,
     (SELECT COUNT(*) FROM orders h WHERE h.phone = o.phone AND h.id != o.id
         AND h.status IN ('delivered','failed')) AS customer_orders,
     (SELECT COUNT(*) FROM orders h WHERE h.phone = o.phone AND h.id != o.id
         AND h.status = 'failed') AS customer_failed,
-    (SELECT a.reason FROM attempts a WHERE a.order_id = o.id AND a.voided_at IS NULL
-        ORDER BY a.id DESC LIMIT 1) AS fail_reason,
-    (SELECT a.note FROM attempts a WHERE a.order_id = o.id AND a.voided_at IS NULL
-        ORDER BY a.id DESC LIMIT 1) AS attempt_note,
-    (SELECT a.cash_collected FROM attempts a WHERE a.order_id = o.id AND a.voided_at IS NULL
-        ORDER BY a.id DESC LIMIT 1) AS cash_collected,
-    (SELECT a.photo_path IS NOT NULL FROM attempts a WHERE a.order_id = o.id AND a.voided_at IS NULL
-        ORDER BY a.id DESC LIMIT 1) AS has_photo,
-    (SELECT a.created_at FROM attempts a WHERE a.order_id = o.id AND a.voided_at IS NULL
-        ORDER BY a.id DESC LIMIT 1) AS finished_at,
+    (SELECT a.reason {_LAST}) AS fail_reason,
+    (SELECT a.note {_LAST}) AS attempt_note,
+    (SELECT a.cash_collected {_LAST}) AS cash_collected,
+    (SELECT a.photo_path IS NOT NULL {_LAST}) AS has_photo,
+    (SELECT a.created_at {_LAST}) AS finished_at,
     (SELECT r.id FROM orders r WHERE r.retry_of = o.id) AS retry_order_id,
     (SELECT r.delivery_date FROM orders r WHERE r.retry_of = o.id) AS retry_date
 """
 
 
-def _driver_payload(conn, drv, d):
-    orders = rows(conn, f"SELECT {_ORDER_FIELDS} FROM orders o WHERE delivery_date = ? AND driver_id = ? "
-                        "ORDER BY stop_number IS NULL, stop_number, id", (d, drv["id"]))
-    for o in orders:
-        o["slot_label"] = SLOT_LABELS.get(o["slot"] or 0)
-        o["has_photo"] = bool(o["has_photo"])
+def _decorate(order):
+    order["slot_label"] = SLOT_LABELS.get(order["slot"] or 0)
+    order["has_photo"] = bool(order["has_photo"])
+    return order
+
+
+def day_state(conn, driver_id, d):
+    r = conn.execute("SELECT * FROM driver_days WHERE driver_id = ? AND day = ?", (driver_id, d)).fetchone()
+    return dict(r) if r else None
+
+
+def driver_payload(conn, drv, d):
+    orders = [_decorate(o) for o in rows(
+        conn, f"SELECT {_ORDER_FIELDS} FROM orders o WHERE delivery_date = ? AND driver_id = ? "
+              "ORDER BY stop_number IS NULL, stop_number, id", (d, drv["id"]))]
     route = conn.execute("SELECT * FROM routes WHERE driver_id = ? AND delivery_date = ?", (drv["id"], d)).fetchone()
     count = lambda s: sum(o["status"] == s for o in orders)
     return {
@@ -443,6 +191,7 @@ def _driver_payload(conn, drv, d):
                                "depot_lat", "depot_lng", "max_orders", "active")},
         "orders": orders,
         "route": dict(route, geometry=json.loads(route["geometry"])) if route else None,
+        "day_state": day_state(conn, drv["id"], d),
         "stats": {
             "total": len(orders),
             "assigned": count("assigned"),
@@ -455,40 +204,144 @@ def _driver_payload(conn, drv, d):
     }
 
 
-def _dispatch_view(d: str):
+def _unassigned_reason(order, drivers, counts) -> str:
+    if order["unscheduled_reason"]:
+        return order["unscheduled_reason"]
+    covering = [d for d in drivers if order["governorate"] in zones_of(d)]
+    if not covering:
+        return f"No driver covers {order['governorate']}."
+    if not any(d["active"] for d in covering):
+        return f"All drivers covering {order['governorate']} are inactive."
+    if all(counts.get(d["id"], 0) >= d["max_orders"] for d in covering if d["active"]):
+        return f"All drivers covering {order['governorate']} are full."
+    return "Not planned yet. Click Plan routes."
+
+
+def dispatch_view(d: str):
     with connect() as conn:
         drivers = rows(conn, "SELECT * FROM drivers ORDER BY active DESC, id")
-        counts = _day_counts(conn, d)
-        unassigned = rows(conn, f"SELECT {_ORDER_FIELDS} FROM orders o "
-                                "WHERE delivery_date = ? AND status = 'pending' ORDER BY governorate", (d,))
+        counts = day_counts(conn, d)
+        unassigned = [_decorate(o) for o in rows(
+            conn, f"SELECT {_ORDER_FIELDS} FROM orders o WHERE delivery_date = ? AND status = 'pending' "
+                  "ORDER BY governorate", (d,))]
         for o in unassigned:
-            o["slot_label"] = SLOT_LABELS.get(o["slot"] or 0)
-            o["reason"] = _unassigned_reason(conn, o, drivers, counts)
-        payload = [_driver_payload(conn, drv, d) for drv in drivers]
+            o["reason"] = _unassigned_reason(o, drivers, counts)
+        payload = [driver_payload(conn, drv, d) for drv in drivers]
         return {
             "day": d,
-            # Hide inactive drivers unless they still hold orders that day.
+            "editable": d >= date.today().isoformat(),
             "drivers": [p for p in payload if p["active"] or p["orders"]],
             "unassigned": unassigned,
         }
 
 
 @router.get("/dispatch", tags=["Dispatch"])
-def dispatch_view(day: Optional[str] = None, _: CurrentUser = Depends(require_admin)):
-    return _dispatch_view(_day(day))
+def get_dispatch(day: Optional[str] = None, _: CurrentUser = Depends(require_admin)):
+    return dispatch_view(_day(day))
 
+
+@router.get("/orders", tags=["Orders"])
+def list_orders(day: Optional[str] = None, _: CurrentUser = Depends(require_admin)):
+    with connect() as conn:
+        return [_decorate(o) for o in rows(
+            conn, f"SELECT {_ORDER_FIELDS}, d.name AS driver_name FROM orders o "
+                  "LEFT JOIN drivers d ON d.id = o.driver_id WHERE o.delivery_date = ? ORDER BY o.id", (_day(day),))]
+
+
+@router.get("/orders/{order_id}", tags=["Orders"])
+def order_detail(order_id: int, _: CurrentUser = Depends(require_admin)):
+    """One order with its full attempt history (undone attempts included)."""
+    with connect() as conn:
+        found = rows(conn, f"SELECT {_ORDER_FIELDS}, d.name AS driver_name FROM orders o "
+                           "LEFT JOIN drivers d ON d.id = o.driver_id WHERE o.id = ?", (order_id,))
+        if not found:
+            raise HTTPException(404, "Order not found")
+        o = _decorate(found[0])
+        o["attempts"] = rows(conn, "SELECT a.*, d.name AS driver_name FROM attempts a "
+                                   "LEFT JOIN drivers d ON d.id = a.driver_id WHERE a.order_id = ? ORDER BY a.id",
+                             (order_id,))
+        for a in o["attempts"]:
+            a["has_photo"] = bool(a.pop("photo_path"))
+        return o
+
+
+@router.delete("/orders", tags=["Orders"])
+def clear_day(day: Optional[str] = None, _: CurrentUser = Depends(require_admin)):
+    """Remove a day's open orders that were never attempted. Finished ones stay."""
+    d = _day(day)
+    _editable(d)
+    with connect() as conn:
+        n = conn.execute(
+            "DELETE FROM orders WHERE delivery_date = ? AND status IN ('pending','assigned') "
+            "AND id NOT IN (SELECT order_id FROM attempts) AND id NOT IN "
+            "(SELECT retry_of FROM orders WHERE retry_of IS NOT NULL)", (d,)).rowcount
+        route_all(conn, d)
+    return {"deleted": n}
+
+
+# ============================================================================
+# PLANNING (admin)
+# ============================================================================
+
+class PlanRequest(BaseModel):
+    day: Optional[str] = None
+    mode: Literal["zones", "optimizer"] = "zones"
+
+
+@router.post("/dispatch/plan", tags=["Dispatch"])
+def plan(req: PlanRequest, _: CurrentUser = Depends(require_admin)):
+    """
+    Assign orders (zone rule or fleet optimizer) and sequence every route.
+    Drivers already on the road keep their stops.
+    """
+    d = _day(req.day)
+    _editable(d)
+    with connect() as conn:
+        summary = planning.plan_day(conn, d, req.mode)
+    return {**dispatch_view(d), "summary": summary}
+
+
+class ReassignRequest(BaseModel):
+    driver_id: Optional[int] = None  # None → back to unassigned
+
+
+@router.post("/orders/{order_id}/reassign", tags=["Dispatch"])
+def reassign(order_id: int, req: ReassignRequest, _: CurrentUser = Depends(require_admin)):
+    with connect() as conn:
+        o = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        if not o:
+            raise HTTPException(404, "Order not found")
+        _editable(o["delivery_date"])
+        if o["status"] not in ("pending", "assigned"):
+            raise HTTPException(400, "This order is already finished.")
+        if req.driver_id is not None and req.driver_id != o["driver_id"]:
+            drv = conn.execute("SELECT * FROM drivers WHERE id = ?", (req.driver_id,)).fetchone()
+            if not drv:
+                raise HTTPException(404, "Driver not found")
+            why = eligibility(drv, o["governorate"], day_counts(conn, o["delivery_date"]).get(drv["id"], 0))
+            if why:
+                raise HTTPException(400, f"Can't assign: {why}.")
+            ds = day_state(conn, drv["id"], o["delivery_date"])
+            if ds and ds["ended_at"]:
+                raise HTTPException(400, f"Can't assign: {drv['name']} has already ended the day.")
+        conn.execute("UPDATE orders SET driver_id = ?, status = ?, stop_number = NULL, eta = NULL, "
+                     "unscheduled_reason = NULL WHERE id = ?",
+                     (req.driver_id, "assigned" if req.driver_id else "pending", order_id))
+        route_all(conn, o["delivery_date"], {o["driver_id"], req.driver_id})
+    return dispatch_view(o["delivery_date"])
+
+
+# ============================================================================
+# DRIVER APP
+# ============================================================================
 
 @router.get("/me/day", tags=["Driver app"])
-def my_day(day: Optional[str] = None, user: CurrentUser = Depends(require_driver)):
-    d = _day(day)
+def my_day(user: CurrentUser = Depends(require_driver)):
+    d = date.today().isoformat()
     with connect() as conn:
         drv = conn.execute("SELECT * FROM drivers WHERE id = ?", (user.driver_id,)).fetchone()
-        return {"day": d, "fail_reasons": FAIL_REASONS, **_driver_payload(conn, dict(drv), d)}
+        return {"day": d, "fail_reasons": FAIL_REASONS, **driver_payload(conn, dict(drv), d)}
 
-
-# ============================================================================
-# DRIVER ACTIONS
-# ============================================================================
 
 def _own_order(conn, order_id: int, user: CurrentUser):
     o = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
@@ -499,10 +352,18 @@ def _own_order(conn, order_id: int, user: CurrentUser):
     return o
 
 
-def _check_open(o):
-    # Second tap / double submit lands here: the order is already finished.
+def _check_can_act(conn, o, user: CurrentUser):
     if o["status"] != "assigned":
+        # A second tap / double submit lands here.
         raise HTTPException(409, f"This order is already {o['status']}.")
+    if o["delivery_date"] != date.today().isoformat():
+        raise HTTPException(400, "Deliveries can only be recorded on their delivery day.")
+    if user.role == "driver":
+        ds = day_state(conn, o["driver_id"], o["delivery_date"])
+        if not ds or not ds["started_at"]:
+            raise HTTPException(409, "Start your route first.")
+        if ds["ended_at"]:
+            raise HTTPException(409, "Your day is already closed.")
 
 
 def _sniff_image(head: bytes) -> Optional[str]:
@@ -534,15 +395,15 @@ async def deliver(
             raise HTTPException(400, "Photo must be a JPEG, PNG or WebP image.")
     with connect() as conn:
         o = _own_order(conn, order_id, user)
-        _check_open(o)
+        _check_can_act(conn, o, user)
         name = None
         if data:
             name = f"{uuid.uuid4().hex}{ext}"  # never trust the uploaded file name
             with open(os.path.join(UPLOAD_DIR, name), "wb") as f:
                 f.write(data)
         conn.execute("INSERT INTO attempts (order_id, driver_id, result, cash_collected, photo_path, lat, lng, created_at) "
-                     "VALUES (?, ?, 'delivered', ?, ?, ?, ?, datetime('now', 'localtime'))",
-                     (order_id, o["driver_id"], cash_collected, name, lat, lng))
+                     "VALUES (?, ?, 'delivered', ?, ?, ?, ?, ?)",
+                     (order_id, o["driver_id"], cash_collected, name, lat, lng, _now()))
         conn.execute("UPDATE orders SET status = 'delivered' WHERE id = ?", (order_id,))
     return {"ok": True}
 
@@ -560,10 +421,10 @@ def fail(order_id: int, req: FailRequest, user: CurrentUser = Depends(current_us
         raise HTTPException(400, f"Reason must be one of: {', '.join(FAIL_REASONS)}")
     with connect() as conn:
         o = _own_order(conn, order_id, user)
-        _check_open(o)
+        _check_can_act(conn, o, user)
         conn.execute("INSERT INTO attempts (order_id, driver_id, result, reason, note, lat, lng, created_at) "
-                     "VALUES (?, ?, 'failed', ?, ?, ?, ?, datetime('now', 'localtime'))",
-                     (order_id, o["driver_id"], req.reason, req.note, req.lat, req.lng))
+                     "VALUES (?, ?, 'failed', ?, ?, ?, ?, ?)",
+                     (order_id, o["driver_id"], req.reason, req.note, req.lat, req.lng, _now()))
         conn.execute("UPDATE orders SET status = 'failed' WHERE id = ?", (order_id,))
     return {"ok": True}
 
@@ -578,11 +439,15 @@ def undo(order_id: int, user: CurrentUser = Depends(current_user)):
         o = _own_order(conn, order_id, user)
         if o["status"] not in ("delivered", "failed"):
             raise HTTPException(409, "Nothing to undo.")
+        if o["delivery_date"] != date.today().isoformat():
+            raise HTTPException(400, "Only today's deliveries can be undone.")
+        ds = day_state(conn, o["driver_id"], o["delivery_date"])
+        if ds and ds["ended_at"]:
+            raise HTTPException(409, "The day is closed; undo is locked.")
         if conn.execute("SELECT 1 FROM orders WHERE retry_of = ?", (order_id,)).fetchone():
             raise HTTPException(409, "A retry was already scheduled for this order; undo is locked.")
         conn.execute("UPDATE attempts SET voided_at = ? WHERE id = (SELECT MAX(id) FROM attempts "
-                     "WHERE order_id = ? AND voided_at IS NULL)",
-                     (datetime.now().isoformat(sep=" ", timespec="seconds"), order_id))
+                     "WHERE order_id = ? AND voided_at IS NULL)", (_now(), order_id))
         conn.execute("UPDATE orders SET status = 'assigned' WHERE id = ?", (order_id,))
     return {"ok": True}
 
@@ -604,8 +469,9 @@ def order_photo(order_id: int, user: CurrentUser = Depends(current_user)):
 @router.post("/orders/{order_id}/retry", tags=["Dispatch"])
 def retry(order_id: int, _: CurrentUser = Depends(require_admin)):
     """
-    Schedule a failed order again on the next day, as a new pending order
-    linked by retry_of. Calling it twice returns the same retry order.
+    Schedule a failed order again as a new pending order linked by retry_of,
+    on the next day (or today, for an old failure). Calling it twice returns
+    the same retry order.
     """
     with connect() as conn:
         o = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
@@ -614,11 +480,10 @@ def retry(order_id: int, _: CurrentUser = Depends(require_admin)):
         existing = conn.execute("SELECT id, delivery_date FROM orders WHERE retry_of = ?", (order_id,)).fetchone()
         if existing:
             return {"retry_order_id": existing["id"], "day": existing["delivery_date"], "created": False}
-        nxt = (date.fromisoformat(o["delivery_date"]) + timedelta(days=1)).isoformat()
+        nxt = max(date.fromisoformat(o["delivery_date"]) + timedelta(days=1), date.today()).isoformat()
         cur = conn.execute(
             "INSERT INTO orders (delivery_date, customer_name, phone, governorate, city, address, landmark, "
             "product, cod_amount, slot, notes, lat, lng, location_precision, retry_of) "
             "SELECT ?, customer_name, phone, governorate, city, address, landmark, product, cod_amount, "
-            "slot, notes, lat, lng, location_precision, id FROM orders WHERE id = ?",
-            (nxt, order_id))
+            "slot, notes, lat, lng, location_precision, id FROM orders WHERE id = ?", (nxt, order_id))
         return {"retry_order_id": cur.lastrowid, "day": nxt, "created": True}

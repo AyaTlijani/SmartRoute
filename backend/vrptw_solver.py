@@ -1,391 +1,159 @@
 """
-vrptw_solver.py — OR-Tools Vehicle Routing Problem with Time Windows.
+vrptw_solver.py — Vehicle Routing Problem with Time Windows, on Google OR-Tools.
 
-SmartRoute optimizes the delivery sequence using:
+Time is in minutes after 9:00 AM (0 = 9:00, 180 = 12:00, 540 = 18:00).
 
-    • Real-world driving times from OpenRouteService
-    • Delivery time windows
-    • Delivery service time
-    • Driver working-day horizon
+solve() is the general model used everywhere:
 
-The driver starts at the depot at 9:00 AM.
+    vehicles     one per driver, each with its own start node, end node
+                 and start time (a driver re-planning at 14:10 from their
+                 last stop starts there, at 310)
+    time         travel (matrix) + service time at each stop; a vehicle may
+                 wait for a window to open; every stop has a window; every
+                 vehicle must be back before day_end
+    capacity     optional maximum number of stops per vehicle
+    eligibility  optional list of vehicles allowed to serve each stop
+                 (zones: a Sfax driver can't take a Tunis order)
+    dropping     optional penalty: an impossible stop is skipped (and
+                 reported) instead of making the whole problem infeasible
+    objective    minimize total travel time (+ the drop penalties)
 
-Time is represented as minutes after 9:00 AM:
-
-    0   = 9:00 AM
-    180 = 12:00 PM
-    240 = 1:00 PM
-    480 = 5:00 PM
-    540 = 6:00 PM
+Search: PARALLEL_CHEAPEST_INSERTION builds a first feasible solution by
+inserting each stop where it costs least; GUIDED_LOCAL_SEARCH then keeps
+improving it (moving/swapping stops, penalizing features of local optima to
+escape them) until the time limit. The result is a good solution, not a
+proven optimum.
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional, Sequence
 
-from ortools.constraint_solver import (
-    pywrapcp,
-    routing_enums_pb2,
-)
+from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
-
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
-TIME_HORIZON_MINUTES = 540
-
-MAX_SLACK_MINUTES = 540
-
+DAY_END = 540
 SERVICE_TIME_DEFAULT = 10
 
-UNREACHABLE_TIME = 999999
-
-
-# ============================================================================
-# TIME HELPERS
-# ============================================================================
 
 def _minutes_to_time_str(minutes_from_9am: int) -> str:
-    """Convert minutes after 9:00 AM to a readable clock time."""
-
-    total_minutes = (9 * 60) + int(minutes_from_9am)
-
-    hours_24 = total_minutes // 60
-    minutes = total_minutes % 60
-
-    period = "AM" if hours_24 < 12 else "PM"
-
-    hours_12 = hours_24 % 12
-
-    if hours_12 == 0:
-        hours_12 = 12
-
-    return f"{hours_12}:{minutes:02d} {period}"
+    total = 9 * 60 + int(minutes_from_9am)
+    h24, m = divmod(total, 60)
+    h12 = h24 % 12 or 12
+    return f"{h12}:{m:02d} {'AM' if h24 < 12 else 'PM'}"
 
 
-def _format_time_window(time_window: tuple) -> str:
-    """Convert a numeric time window into a readable string."""
-
-    start, end = time_window
-
-    return (
-        f"{_minutes_to_time_str(start)} – "
-        f"{_minutes_to_time_str(end)}"
-    )
+def _format_time_window(window) -> str:
+    return f"{_minutes_to_time_str(window[0])} – {_minutes_to_time_str(window[1])}"
 
 
-# ============================================================================
-# CORE SOLVER
-# ============================================================================
-
-def solve_vrptw(
-    data: Dict[str, Any]
-) -> Optional[List[Dict[str, Any]]]:
+def solve(
+    matrix: List[List[int]],
+    windows: Sequence[tuple],
+    service: Sequence[int],
+    starts: Sequence[int],
+    ends: Sequence[int],
+    start_times: Sequence[int],
+    capacities: Optional[Sequence[int]] = None,
+    allowed: Optional[Dict[int, List[int]]] = None,
+    drop_penalty: Optional[int] = None,
+    time_limit: int = 2,
+    day_end: int = DAY_END,
+) -> Optional[Dict[str, Any]]:
     """
-    Solve the Vehicle Routing Problem with Time Windows.
-
-    The vehicle:
-
-        1. Starts at the depot at 9:00 AM.
-        2. Visits every delivery exactly once.
-        3. Respects every delivery time window.
-        4. Can wait before a time window opens.
-        5. Returns to the depot before 6:00 PM.
-
-    The optimization objective is total driving time.
+    Returns {"routes": [[{"node", "arrival"}...] per vehicle], "dropped": [nodes],
+    "end_times": [minutes per vehicle]} or None if no feasible solution exists.
     """
+    n, nv = len(matrix), len(starts)
+    terminals = set(starts) | set(ends)
+    stops = [i for i in range(n) if i not in terminals]
 
-    time_matrix = data["time_matrix"]
-    time_windows = data["time_windows"]
-    num_vehicles = data["num_vehicles"]
-    depot = data["depot"]
-    addresses = data["addresses"]
-
-    service_time = data.get(
-        "service_time",
-        SERVICE_TIME_DEFAULT,
-    )
-
-    n = len(time_matrix)
-
-    # ========================================================================
-    # 1. ROUTING INDEX MANAGER
-    # ========================================================================
-
-    manager = pywrapcp.RoutingIndexManager(
-        n,
-        num_vehicles,
-        depot,
-    )
-
-    # ========================================================================
-    # 2. ROUTING MODEL
-    # ========================================================================
-
+    manager = pywrapcp.RoutingIndexManager(n, nv, list(starts), list(ends))
     routing = pywrapcp.RoutingModel(manager)
 
-    # ========================================================================
-    # 3. TRAVEL-TIME CALLBACK
-    # ========================================================================
+    def travel(i, j):
+        return int(matrix[manager.IndexToNode(i)][manager.IndexToNode(j)])
 
-    def travel_time_callback(
-        from_routing_index: int,
-        to_routing_index: int,
-    ) -> int:
+    def travel_plus_service(i, j):
+        a = manager.IndexToNode(i)
+        return int(matrix[a][manager.IndexToNode(j)]) + int(service[a])
 
-        from_node = manager.IndexToNode(
-            from_routing_index
-        )
+    routing.SetArcCostEvaluatorOfAllVehicles(routing.RegisterTransitCallback(travel))
 
-        to_node = manager.IndexToNode(
-            to_routing_index
-        )
+    routing.AddDimension(routing.RegisterTransitCallback(travel_plus_service),
+                         day_end, day_end, False, "Time")
+    time = routing.GetDimensionOrDie("Time")
 
-        return int(
-            time_matrix[from_node][to_node]
-        )
+    for node in stops:
+        time.CumulVar(manager.NodeToIndex(node)).SetRange(*windows[node])
+    for v in range(nv):
+        time.CumulVar(routing.Start(v)).SetRange(start_times[v], start_times[v])
+        time.CumulVar(routing.End(v)).SetRange(start_times[v], day_end)
+        routing.AddVariableMinimizedByFinalizer(time.CumulVar(routing.End(v)))
 
-    travel_callback_index = routing.RegisterTransitCallback(
-        travel_time_callback
-    )
+    if capacities is not None:
+        demand = routing.RegisterUnaryTransitCallback(
+            lambda i: 0 if manager.IndexToNode(i) in terminals else 1)
+        routing.AddDimensionWithVehicleCapacity(demand, 0, list(capacities), True, "Stops")
 
-    # Minimize total driving time.
-    routing.SetArcCostEvaluatorOfAllVehicles(
-        travel_callback_index
-    )
-
-    # ========================================================================
-    # 4. TIME CALLBACK
-    # ========================================================================
-
-    def time_callback(
-        from_routing_index: int,
-        to_routing_index: int,
-    ) -> int:
-
-        from_node = manager.IndexToNode(
-            from_routing_index
-        )
-
-        to_node = manager.IndexToNode(
-            to_routing_index
-        )
-
-        travel_minutes = int(
-            time_matrix[from_node][to_node]
-        )
-
-        # No service time when leaving the depot.
-        if from_node == depot:
-            return travel_minutes
-
-        # Add delivery service time when leaving a customer.
-        return travel_minutes + service_time
-
-    time_callback_index = routing.RegisterTransitCallback(
-        time_callback
-    )
-
-    # ========================================================================
-    # 5. TIME DIMENSION
-    # ========================================================================
-
-    routing.AddDimension(
-        time_callback_index,
-        MAX_SLACK_MINUTES,
-        TIME_HORIZON_MINUTES,
-        False,
-        "Time",
-    )
-
-    time_dimension = routing.GetDimensionOrDie(
-        "Time"
-    )
-
-    # ========================================================================
-    # 6. DELIVERY TIME WINDOWS
-    # ========================================================================
-
-    for node_idx, time_window in enumerate(time_windows):
-
-        if node_idx == depot:
-            continue
-
-        window_start, window_end = time_window
-
-        routing_index = manager.NodeToIndex(
-            node_idx
-        )
-
-        time_dimension.CumulVar(
-            routing_index
-        ).SetRange(
-            window_start,
-            window_end,
-        )
-
-    # ========================================================================
-    # 6b. OPTIONAL: ALLOW SKIPPING STOPS
-    # ========================================================================
-    #
-    # With "drop_penalty" set, a stop that cannot fit its time window is
-    # left out (at a high cost) instead of making the whole route fail.
-    # The caller reports skipped stops back to the dispatcher.
-
-    drop_penalty = data.get("drop_penalty")
+    if allowed:
+        for node, vehicles in allowed.items():
+            # -1 = "not visited", so the stop can still be dropped (and reported).
+            routing.VehicleVar(manager.NodeToIndex(node)).SetValues([-1] + [int(v) for v in vehicles])
 
     if drop_penalty:
-        for node_idx in range(n):
-            if node_idx != depot:
-                routing.AddDisjunction(
-                    [manager.NodeToIndex(node_idx)],
-                    int(drop_penalty),
-                )
+        for node in stops:
+            routing.AddDisjunction([manager.NodeToIndex(node)], int(drop_penalty))
 
-    # ========================================================================
-    # 7. DRIVER START / END
-    # ========================================================================
+    params = pywrapcp.DefaultRoutingSearchParameters()
+    params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
+    params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    params.time_limit.seconds = int(time_limit)
 
-    for vehicle_id in range(num_vehicles):
-
-        start_index = routing.Start(
-            vehicle_id
-        )
-
-        end_index = routing.End(
-            vehicle_id
-        )
-
-        # Driver starts at exactly 9:00 AM.
-        time_dimension.CumulVar(
-            start_index
-        ).SetRange(
-            0,
-            0,
-        )
-
-        # Driver must return by 6:00 PM.
-        time_dimension.CumulVar(
-            end_index
-        ).SetRange(
-            0,
-            TIME_HORIZON_MINUTES,
-        )
-
-        # Prefer the earliest possible return.
-        routing.AddVariableMinimizedByFinalizer(
-            time_dimension.CumulVar(end_index)
-        )
-
-    # ========================================================================
-    # 8. SEARCH PARAMETERS
-    # ========================================================================
-
-    search_parameters = (
-        pywrapcp.DefaultRoutingSearchParameters()
-    )
-
-    # Use a time-window-aware construction strategy.
-    search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
-    )
-
-    # Improve the initial route.
-    search_parameters.local_search_metaheuristic = (
-        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    )
-
-    search_parameters.time_limit.seconds = int(
-        data.get("time_limit_seconds", 30)
-    )
-
-    # ========================================================================
-    # 9. SOLVE
-    # ========================================================================
-
-    solution = routing.SolveWithParameters(
-        search_parameters
-    )
-
+    solution = routing.SolveWithParameters(params)
     if solution is None:
         return None
 
-    # ========================================================================
-    # 10. EXTRACT ACTUAL OR-TOOLS ROUTE
-    # ========================================================================
+    routes, end_times, visited = [], [], set()
+    for v in range(nv):
+        route, index = [], solution.Value(routing.NextVar(routing.Start(v)))
+        while not routing.IsEnd(index):
+            node = manager.IndexToNode(index)
+            route.append({"node": node, "arrival": solution.Min(time.CumulVar(index))})
+            visited.add(node)
+            index = solution.Value(routing.NextVar(index))
+        routes.append(route)
+        end_times.append(solution.Min(time.CumulVar(routing.End(v))))
+    return {"routes": routes, "dropped": [s for s in stops if s not in visited], "end_times": end_times}
 
-    return _extract_route(
-        manager=manager,
-        routing=routing,
-        solution=solution,
-        time_dimension=time_dimension,
-        data=data,
+
+def solve_vrptw(data: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """
+    One vehicle leaving the depot at 9:00 and returning before day end.
+    Kept as the simple entry point (benchmark, tests). Returns the stops in
+    order, each with its node index, stop number, arrival and window.
+    """
+    depot = data["depot"]
+    n = len(data["time_matrix"])
+    service = data.get("service_time", SERVICE_TIME_DEFAULT)
+    result = solve(
+        matrix=data["time_matrix"],
+        windows=data["time_windows"],
+        service=[0 if i == depot else service for i in range(n)],
+        starts=[depot], ends=[depot], start_times=[0],
+        drop_penalty=data.get("drop_penalty"),
+        time_limit=data.get("time_limit_seconds", 30),
+        day_end=data["time_windows"][depot][1],
     )
-
-
-# ============================================================================
-# ROUTE EXTRACTION
-# ============================================================================
-
-def _extract_route(
-    manager: pywrapcp.RoutingIndexManager,
-    routing: pywrapcp.RoutingModel,
-    solution,
-    time_dimension,
-    data: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-    """
-    Extract the exact route selected by OR-Tools.
-
-    No manual reordering is performed here.
-    """
-
-    stops: List[Dict[str, Any]] = []
-
-    stop_number = 1
-
-    index = routing.Start(0)
-
-    while not routing.IsEnd(index):
-
-        node = manager.IndexToNode(index)
-
-        if node != data["depot"]:
-
-            arrival_minutes = solution.Min(
-                time_dimension.CumulVar(index)
-            )
-
-            time_window = data["time_windows"][node]
-
-            if "slots" in data:
-                slot_number = data["slots"][node]
-            elif time_window[1] <= 180:
-                slot_number = 1
-            else:
-                slot_number = 2
-
-            stops.append(
-                {
-                    "stop_number": stop_number,
-                    # Index in the input list: lets callers map stops back
-                    # to their data even when two addresses are identical.
-                    "node": node,
-                    "address": data["addresses"][node],
-                    "arrival_minutes": arrival_minutes,
-                    "arrival_time": _minutes_to_time_str(
-                        arrival_minutes
-                    ),
-                    "slot": slot_number,
-                    "time_window": _format_time_window(
-                        time_window
-                    ),
-                }
-            )
-
-            stop_number += 1
-
-        index = solution.Value(
-            routing.NextVar(index)
-        )
-
+    if result is None:
+        return None
+    stops = []
+    for k, s in enumerate(result["routes"][0], start=1):
+        window = data["time_windows"][s["node"]]
+        stops.append({
+            "stop_number": k,
+            "node": s["node"],
+            "address": data["addresses"][s["node"]],
+            "arrival_minutes": s["arrival"],
+            "arrival_time": _minutes_to_time_str(s["arrival"]),
+            "slot": data["slots"][s["node"]] if "slots" in data else (1 if window[1] <= 180 else 2),
+            "time_window": _format_time_window(window),
+        })
     return stops

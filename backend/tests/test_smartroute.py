@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import db  # noqa: E402
 import main  # noqa: E402
+import planning  # noqa: E402
 import sample_data  # noqa: E402
 from orders_import import TEMPLATE_HEADERS  # noqa: E402
 from route_eval import nearest_neighbour, simulate  # noqa: E402
@@ -42,6 +43,7 @@ PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setattr(planning, "now_minutes", lambda: 0)  # "it is 9:00 AM" for every test
     with TestClient(main.app) as c:
         yield c
 
@@ -157,7 +159,7 @@ def test_assignment_respects_zones_capacity_and_activity(client, admin):
     client.put(f"/drivers/{youssef['id']}", json=body(youssef, active=False), headers=admin)
 
     import_sample(client, admin)
-    view = client.post("/dispatch/assign", json={"day": TODAY}, headers=admin).json()
+    view = client.post("/dispatch/plan", json={"day": TODAY}, headers=admin).json()
     for d in view["drivers"]:
         zones = d["zones"].split(",")
         assert all(o["governorate"] in zones for o in d["orders"])
@@ -172,7 +174,7 @@ def test_assignment_respects_zones_capacity_and_activity(client, admin):
 
 def test_routes_respect_time_windows_and_beat_or_match_baseline(client, admin):
     import_sample(client, admin)
-    view = client.post("/dispatch/assign", json={"day": TODAY}, headers=admin).json()
+    view = client.post("/dispatch/plan", json={"day": TODAY}, headers=admin).json()
     routed = [d for d in view["drivers"] if d["route"]]
     assert routed
     windows = {0: (0, 480), 1: (0, 180), 2: (240, 480)}
@@ -212,7 +214,7 @@ def test_unschedulable_stop_is_explained(client, admin):
         "max_orders": 5, "username": "faraway", "password": "secret1"})
     client.post("/orders/import", headers=admin, json={"day": TODAY, "rows": [
         row(governorate="Tataouine", city="", slot="morning", phone="22333444")]})
-    view = client.post("/dispatch/assign", json={"day": TODAY}, headers=admin).json()
+    view = client.post("/dispatch/plan", json={"day": TODAY}, headers=admin).json()
     far = next(d for d in view["drivers"] if d["name"] == "Far Away")
     o = far["orders"][0]
     assert o["status"] == "assigned" and o["stop_number"] is None
@@ -224,7 +226,7 @@ def test_same_address_orders_stay_distinct(client, admin):
     same = dict(address="5 Rue Identique", city="El Menzah", lat=36.838, lng=10.17)
     client.post("/orders/import", headers=admin, json={"day": TODAY, "rows": [
         row(customer_name="First", phone="22100100", **same), row(customer_name="Second", phone="22100200", **same)]})
-    view = client.post("/dispatch/assign", json={"day": TODAY}, headers=admin).json()
+    view = client.post("/dispatch/plan", json={"day": TODAY}, headers=admin).json()
     orders = [o for d in view["drivers"] for o in d["orders"]]
     assert {o["customer_name"] for o in orders} == {"First", "Second"}
     assert len({o["id"] for o in orders}) == 2 and all(o["stop_number"] for o in orders)
@@ -232,7 +234,7 @@ def test_same_address_orders_stay_distinct(client, admin):
 
 def test_reassign_checks_eligibility(client, admin):
     import_sample(client, admin)
-    view = client.post("/dispatch/assign", json={"day": TODAY}, headers=admin).json()
+    view = client.post("/dispatch/plan", json={"day": TODAY}, headers=admin).json()
     tunis_order = next(o for d in view["drivers"] for o in d["orders"] if o["governorate"] == "Tunis")
     karim = next(d for d in view["drivers"] if d["name"].startswith("Karim"))  # Sfax only
     r = client.post(f"/orders/{tunis_order['id']}/reassign", json={"driver_id": karim["id"]}, headers=admin)
@@ -245,9 +247,14 @@ def test_reassign_checks_eligibility(client, admin):
 
 def test_driver_flow_ownership_duplicates_undo_retry(client, admin):
     import_sample(client, admin)
-    client.post("/dispatch/assign", json={"day": TODAY}, headers=admin)
+    client.post("/dispatch/plan", json={"day": TODAY}, headers=admin)
     ahmed = login(client, "ahmed", "driver123")
     sami = login(client, "sami", "driver123")
+    first = client.get("/me/day", headers=ahmed).json()["orders"][0]
+    r = client.post(f"/orders/{first['id']}/deliver", data={"cash_collected": 1}, headers=ahmed)
+    assert r.status_code == 409 and "Start your route" in r.json()["detail"]
+    client.post("/me/start", headers=ahmed)
+    client.post("/me/start", headers=sami)
     mine = client.get("/me/day", headers=ahmed).json()
     assert mine["name"] == "Ahmed Trabelsi" and mine["orders"]
     o1, o2 = mine["orders"][0], mine["orders"][1]
@@ -288,11 +295,12 @@ def test_driver_flow_ownership_duplicates_undo_retry(client, admin):
 
 def test_rerouting_keeps_finished_stops(client, admin):
     import_sample(client, admin)
-    client.post("/dispatch/assign", json={"day": TODAY}, headers=admin)
+    client.post("/dispatch/plan", json={"day": TODAY}, headers=admin)
     ahmed = login(client, "ahmed", "driver123")
+    client.post("/me/start", headers=ahmed)
     first = client.get("/me/day", headers=ahmed).json()["orders"][0]
     client.post(f"/orders/{first['id']}/deliver", data={"cash_collected": first["cod_amount"]}, headers=ahmed)
-    client.post("/dispatch/reoptimize", json={"day": TODAY}, headers=admin)
+    client.post("/dispatch/plan", json={"day": TODAY}, headers=admin)
     after = client.get("/me/day", headers=ahmed).json()["orders"]
     kept = next(o for o in after if o["id"] == first["id"])
     assert kept["status"] == "delivered" and kept["stop_number"] == first["stop_number"]
@@ -329,18 +337,102 @@ def test_overview_flags_attention(client, admin):
 
 # ---------------------------------------------------------------- F. regression
 
-def test_quick_planner_explains_missing_key(client, admin):
-    r = client.post("/optimize-route", headers=admin, json={
-        "depot_address": "Avenue Habib Bourguiba, Tunis", "deliveries": [{"address": "La Marsa, Tunisia", "slot": 1}]})
-    assert r.status_code == 503 and "ORS_API_KEY" in r.json()["detail"]
-
-
 def test_clear_day_keeps_finished_orders(client, admin):
     import_sample(client, admin)
-    client.post("/dispatch/assign", json={"day": TODAY}, headers=admin)
+    client.post("/dispatch/plan", json={"day": TODAY}, headers=admin)
     ahmed = login(client, "ahmed", "driver123")
+    client.post("/me/start", headers=ahmed)
     o = client.get("/me/day", headers=ahmed).json()["orders"][0]
     client.post(f"/orders/{o['id']}/deliver", data={"cash_collected": o["cod_amount"]}, headers=ahmed)
     client.delete("/orders", params={"day": TODAY}, headers=admin)
     left = client.get("/orders", params={"day": TODAY}, headers=admin).json()
     assert [x["id"] for x in left] == [o["id"]]
+
+
+# ---------------------------------------------------------------- v2: day rules
+
+YESTERDAY = (date.today() - timedelta(days=1)).isoformat()
+
+
+def test_past_days_are_read_only(client, admin):
+    r = client.post("/orders/import", json={"day": YESTERDAY, "rows": [row()]}, headers=admin)
+    assert r.status_code == 400 and "read-only" in r.json()["detail"]
+    assert client.post("/dispatch/plan", json={"day": YESTERDAY}, headers=admin).status_code == 400
+    assert client.delete("/orders", params={"day": YESTERDAY}, headers=admin).status_code == 400
+    with db.connect() as conn:
+        past = conn.execute("SELECT id FROM orders WHERE delivery_date = ? AND status = 'delivered' LIMIT 1",
+                            (YESTERDAY,)).fetchone()
+    assert client.post(f"/orders/{past['id']}/undo", headers=admin).status_code == 400
+
+
+def test_driver_day_start_end_and_cash_handover(client, admin):
+    client.post("/orders/import", headers=admin, json={"day": TODAY, "rows": [
+        row(customer_name="A", phone="22100001", cod_amount_dt=40), row(customer_name="B", phone="22100002", cod_amount_dt=60)]})
+    client.post("/dispatch/plan", json={"day": TODAY}, headers=admin)
+    drv = next(d for d in client.get("/dispatch", headers=admin).json()["drivers"] if d["orders"])
+    username = drv["name"].split()[0].lower()
+    me = login(client, username, "driver123")
+
+    assert client.post("/me/end", json={"cash_declared": 0}, headers=me).status_code == 409   # not started
+    day = client.post("/me/start", headers=me).json()
+    assert day["day_state"]["started_at"]
+    assert client.post("/me/start", headers=me).status_code == 409                            # only once
+    a, b = day["orders"]
+    client.post(f"/orders/{a['id']}/deliver", data={"cash_collected": 40}, headers=me)
+    r = client.post("/me/end", json={"cash_declared": 40}, headers=me)
+    assert r.status_code == 409 and "remaining" in r.json()["detail"]                        # B still open
+    client.post(f"/orders/{b['id']}/deliver", data={"cash_collected": 60}, headers=me)
+    ended = client.post("/me/end", json={"cash_declared": 95}, headers=me).json()             # 5 DT short
+    assert ended["day_state"]["ended_at"] and ended["day_state"]["cash_declared"] == 95
+    assert client.post(f"/orders/{a['id']}/undo", headers=me).status_code == 409             # day closed
+
+    ov = client.get("/overview", headers=admin).json()
+    alert = next(x for x in ov["attention"] if "Cash handover" in x["title"])
+    assert alert["level"] == "critical" and "difference of 5" in alert["detail"]
+    url = f"/drivers/{drv['id']}/days/{TODAY}/receive"
+    assert client.post(url, json={"cash_received": 95}, headers=me).status_code == 403       # admins only
+    assert client.post(url, json={"cash_received": 95}, headers=admin).status_code == 200
+    assert client.post(url, json={"cash_received": 95}, headers=admin).status_code == 409    # once
+    fleet = client.get("/overview", headers=admin).json()["fleet"]
+    assert next(f for f in fleet if f["id"] == drv["id"])["state"] == "reconciled"
+
+
+def test_replan_from_current_position_and_time(client, admin, monkeypatch):
+    morning = [row(customer_name=f"M{i}", phone=f"2220000{i}", city="El Menzah", slot="morning") for i in range(3)]
+    anytime = [row(customer_name=f"A{i}", phone=f"2230000{i}", city="Le Bardo") for i in range(3)]
+    client.post("/orders/import", headers=admin, json={"day": TODAY, "rows": morning + anytime})
+    client.post("/dispatch/plan", json={"day": TODAY}, headers=admin)
+    view = client.get("/dispatch", headers=admin).json()
+    drv = next(d for d in view["drivers"] if len(d["orders"]) >= 3)
+    me = login(client, drv["name"].split()[0].lower(), "driver123")
+    client.post("/me/start", headers=me)
+
+    monkeypatch.setattr(planning, "now_minutes", lambda: 240)  # it is now 1:00 PM
+    day = client.post("/me/replan", json={"lat": 36.81, "lng": 10.14}, headers=me).json()
+    for o in day["orders"]:
+        if o["stop_number"]:
+            assert o["eta"].endswith("PM")                     # nothing planned in the past
+        elif o["slot"] == 1:
+            assert "window closed" in o["unscheduled_reason"]  # morning stops can't be met any more
+
+
+def test_started_driver_keeps_stops_when_admin_replans(client, admin):
+    import_sample(client, admin)
+    client.post("/dispatch/plan", json={"day": TODAY}, headers=admin)
+    ahmed = login(client, "ahmed", "driver123")
+    before = {o["id"] for o in client.post("/me/start", headers=ahmed).json()["orders"]}
+    client.post("/dispatch/plan", json={"day": TODAY, "mode": "optimizer"}, headers=admin)
+    after = {o["id"] for o in client.get("/me/day", headers=ahmed).json()["orders"]}
+    assert before <= after
+
+
+def test_optimizer_mode_respects_zones_capacity_and_windows(client, admin):
+    import_sample(client, admin)
+    zones = client.post("/dispatch/plan", json={"day": TODAY, "mode": "zones"}, headers=admin).json()
+    opt = client.post("/dispatch/plan", json={"day": TODAY, "mode": "optimizer"}, headers=admin).json()
+    for d in opt["drivers"]:
+        assert all(o["governorate"] in d["zones"].split(",") for o in d["orders"])
+        assert len(d["orders"]) <= d["max_orders"]
+    assert opt["summary"]["unassigned"] <= zones["summary"]["unassigned"]
+    # Fleet-wide optimization should not drive more than the zone rule.
+    assert opt["summary"]["total_driving_minutes"] <= zones["summary"]["total_driving_minutes"] * 1.02

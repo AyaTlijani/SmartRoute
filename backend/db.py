@@ -99,6 +99,21 @@ CREATE TABLE IF NOT EXISTS routes (
     PRIMARY KEY (driver_id, delivery_date)
 );
 
+-- One row per driver per working day: start, end and cash handover.
+CREATE TABLE IF NOT EXISTS driver_days (
+    driver_id      INTEGER NOT NULL REFERENCES drivers(id),
+    day            TEXT NOT NULL,
+    started_at     TEXT,                 -- "Start route" after loading packages
+    last_lat       REAL,                 -- last known position (re-planning)
+    last_lng       REAL,
+    ended_at       TEXT,                 -- "End day"
+    cash_declared  REAL,                 -- what the driver says they hand over
+    cash_received  REAL,                 -- what the admin confirms receiving
+    received_at    TEXT,
+    received_by    INTEGER REFERENCES users(id),
+    PRIMARY KEY (driver_id, day)
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_date ON orders(delivery_date);
 CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(phone);
 CREATE INDEX IF NOT EXISTS idx_attempts_order ON attempts(order_id);

@@ -107,6 +107,7 @@ def overview(day: str = None, _: CurrentUser = Depends(require_admin)):
             FROM orders o LEFT JOIN drivers d ON d.id = o.driver_id WHERE o.delivery_date = ?""", (d,))
         drivers = rows(conn, "SELECT * FROM drivers WHERE active = 1 ORDER BY name")
         routes = {r["driver_id"]: r for r in rows(conn, "SELECT * FROM routes WHERE delivery_date = ?", (d,))}
+        days = {r["driver_id"]: r for r in rows(conn, "SELECT * FROM driver_days WHERE day = ?", (d,))}
         activity = rows(conn, """
             SELECT a.created_at, a.result, a.reason, a.cash_collected, o.customer_name, o.id AS order_id,
                    d.name AS driver
@@ -152,16 +153,31 @@ def overview(day: str = None, _: CurrentUser = Depends(require_admin)):
     fleet = []
     for drv in drivers:
         mine = [o for o in orders if o["driver_id"] == drv["id"]]
-        if not mine:
+        ds = days.get(drv["id"])
+        if not mine and not ds:
             continue
         r = routes.get(drv["id"])
+        collected = round(sum(o["cash_collected"] or 0 for o in mine if o["status"] == "delivered"), 1)
+        state = ("reconciled" if ds and ds["received_at"] else "finished" if ds and ds["ended_at"]
+                 else "on_road" if ds and ds["started_at"] else "not_started")
         fleet.append({
             "id": drv["id"], "name": drv["name"], "total": len(mine), "max_orders": drv["max_orders"],
             "delivered": sum(o["status"] == "delivered" for o in mine),
             "failed": sum(o["status"] == "failed" for o in mine),
-            "cash_collected": round(sum(o["cash_collected"] or 0 for o in mine if o["status"] == "delivered"), 1),
+            "cash_collected": collected,
             "end_time": r["end_time"] if r else None,
+            "state": state,
+            "started_at": ds and ds["started_at"], "ended_at": ds and ds["ended_at"],
+            "cash_declared": ds and ds["cash_declared"], "cash_received": ds and ds["cash_received"],
         })
+        if state == "finished":
+            gap = round(collected - (ds["cash_declared"] or 0), 1)
+            attention.insert(0, {
+                "level": "critical" if abs(gap) > 0.05 else "warning",
+                "title": f"Cash handover from {drv['name']}: {ds['cash_declared']:g} DT declared",
+                "detail": (f"Deliveries recorded {collected:g} DT, a difference of {gap:g} DT. Count it and confirm."
+                           if abs(gap) > 0.05 else "Matches the recorded deliveries. Count it and confirm receipt."),
+                "to": f"/admin/dispatch?driver={drv['id']}"})
 
     return {
         "day": d,

@@ -15,3 +15,6 @@ Scenario 2: no slots (any time 9:00-17:00), pure distance problem
 | sorted by latitude | 286 | +37.0% | 5 | 0 |
 | nearest neighbour | 209 | +0.0% | 0 | 0 |
 | OR-Tools | 194 | -7.2% | 0 | 0 |
+
+Scenario 3: whole fleet, 5 drivers, ~55 orders/day over 10 days
+

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from auth import CurrentUser, hash_password, require_admin
 from db import connect, rows
-from dispatch import _route_all
+from planning import route_all as _route_all
 from tunisia import GOVERNORATES
 
 router = APIRouter(tags=["Drivers"])

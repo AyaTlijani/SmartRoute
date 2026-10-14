@@ -82,8 +82,55 @@ def report(results):
     return "\n".join(lines)
 
 
+def run_fleet(days=10):
+    """
+    Scenario 3: a whole day for the 5 demo drivers. The zone rule + per-driver
+    OR-Tools is compared with the fleet optimizer (one OR-Tools model choosing
+    drivers and sequences together). Same orders, matrix and constraints.
+    """
+    import os
+    import tempfile
+    from datetime import date
+
+    import db
+    import planning
+    from orders_import import insert_orders, read_excel, validate_rows
+    from sample_data import sample_orders_xlsx, seed_demo
+
+    planning.now_minutes = lambda: 0
+    db.DB_PATH = os.path.join(tempfile.mkdtemp(), "eval.db")
+    db.init_db()
+    with db.connect() as conn:
+        seed_demo(conn, days=0)
+    results = []
+    for k in range(days):
+        day = date.fromordinal(date.today().toordinal() + 30 + k)  # future days: nobody has started
+        d = day.isoformat()
+        with db.connect() as conn:
+            checked = validate_rows(read_excel(sample_orders_xlsx(day)), d, conn)
+            insert_orders(conn, d, [r["data"] for r in checked if not r["errors"]])
+            row = {}
+            for mode in ("zones", "optimizer"):
+                s = planning.plan_day(conn, d, mode)
+                late = sum(1 for _ in conn.execute(
+                    "SELECT 1 FROM orders WHERE delivery_date = ? AND status = 'assigned' AND stop_number IS NULL", (d,)))
+                row[mode] = (s["total_driving_minutes"], s["assigned"] - late, s["unassigned"] + late)
+            results.append(row)
+        print(f"fleet day {k + 1:>2}/{days}", file=sys.stderr)
+    lines = ["| Assignment | Total driving, all drivers (min/day) | Orders on a route | Not served |",
+             "|---|---|---|---|"]
+    base = statistics.mean(r["zones"][0] for r in results)
+    for mode, label in (("zones", "Zone rule + OR-Tools per driver"), ("optimizer", "Fleet optimizer (OR-Tools)")):
+        avg = statistics.mean(r[mode][0] for r in results)
+        lines.append(f"| {label} | {avg:.0f} ({100 * (avg - base) / base:+.1f}%) | "
+                     f"{statistics.mean(r[mode][1] for r in results):.1f} | {statistics.mean(r[mode][2] for r in results):.1f} |")
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     print("Scenario 1: customers' morning/afternoon slots enforced\n")
     print(report(run(with_windows=True)))
     print("\nScenario 2: no slots (any time 9:00-17:00), pure distance problem\n")
     print(report(run(with_windows=False)))
+    print("\nScenario 3: whole fleet, 5 drivers, ~55 orders/day over 10 days\n")
+    print(run_fleet())
