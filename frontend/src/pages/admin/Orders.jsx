@@ -48,8 +48,8 @@ export default function Orders() {
           Import the confirmed-orders Excel file to schedule deliveries.
         </EmptyState></Panel>
       ) : (
-        <Panel bodyClass="">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3">
+        <Panel bodyClass="px-5 pb-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 pt-5">
             <div className="flex flex-wrap gap-1" role="tablist">
               {FILTERS.map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={status === k}
@@ -65,44 +65,44 @@ export default function Orders() {
             </div>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[880px] text-left text-sm">
-              <thead className="border-b border-slate-200 text-[13px] text-ink-500">
+            <table className="table-soft min-w-[880px]">
+              <thead>
                 <tr>
-                  <th className="px-5 py-2.5 font-medium">Order</th>
-                  <th className="py-2.5 pr-4 font-medium">Customer</th>
-                  <th className="py-2.5 pr-4 font-medium">Location</th>
-                  <th className="py-2.5 pr-4 font-medium">Driver</th>
-                  <th className="py-2.5 pr-4 font-medium">Slot / ETA</th>
-                  <th className="py-2.5 pr-4 text-right font-medium">COD</th>
-                  <th className="py-2.5 pr-5 font-medium">Status</th>
+                  <th>Order</th>
+                  <th>Customer</th>
+                  <th>Location</th>
+                  <th>Driver</th>
+                  <th>Slot / ETA</th>
+                  <th className="text-right">COD</th>
+                  <th>Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody>
                 {shown.map((o) => (
                   <tr key={o.id} onClick={() => setOpen(o.id)} className="cursor-pointer align-top hover:bg-slate-50">
-                    <td className="px-5 py-3 tabular text-ink-500">#{o.id}</td>
-                    <td className="py-3 pr-4">
+                    <td className="tabular text-ink-500">#{o.id}</td>
+                    <td>
                       <button type="button" className="text-left font-medium hover:text-brand" onClick={() => setOpen(o.id)}>{o.customer_name}</button>
                       <span className="block tabular text-[13px] text-ink-500">{o.phone}</span>
                       <div className="mt-1"><CustomerBadge order={o} /></div>
                     </td>
-                    <td className="py-3 pr-4">
+                    <td>
                       {o.city || o.governorate}
                       <span className="block text-[13px] text-ink-500">{o.governorate}</span>
                       <div className="mt-1"><PrecisionBadge precision={o.location_precision} /></div>
                     </td>
-                    <td className="py-3 pr-4">{o.driver_name || <span className="text-ink-500">None</span>}</td>
-                    <td className="whitespace-nowrap py-3 pr-4 tabular">
+                    <td>{o.driver_name || <span className="text-ink-500">None</span>}</td>
+                    <td className="whitespace-nowrap tabular">
                       {o.eta || "–"}
                       <span className="block text-[13px] text-ink-500">{["Any time", "Morning", "Afternoon"][o.slot || 0]}</span>
                     </td>
-                    <td className="whitespace-nowrap py-3 pr-4 text-right tabular">
+                    <td className="whitespace-nowrap text-right tabular">
                       {dt(o.cod_amount)}
                       {o.status === "delivered" && o.cash_collected < o.cod_amount && (
                         <span className="block text-[13px] text-red-700">got {dt(o.cash_collected)}</span>
                       )}
                     </td>
-                    <td className="py-3 pr-5">
+                    <td>
                       <StatusBadge status={o.status} />
                       {o.fail_reason && <span className="mt-1 block text-[13px] text-red-700">{o.fail_reason}</span>}
                       {o.retry_order_id && <span className="mt-1 block text-[13px] text-ink-500">Retry #{o.retry_order_id}</span>}

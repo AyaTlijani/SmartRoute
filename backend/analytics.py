@@ -113,6 +113,15 @@ def overview(day: str = None, _: CurrentUser = Depends(require_admin)):
                    d.name AS driver
             FROM attempts a JOIN orders o ON o.id = a.order_id LEFT JOIN drivers d ON d.id = a.driver_id
             WHERE o.delivery_date = ? AND a.voided_at IS NULL ORDER BY a.created_at DESC, a.id DESC LIMIT 8""", (d,))
+        # The 7 days ending on d, for the overview charts.
+        start = (date.fromisoformat(d) - timedelta(days=6)).isoformat()
+        week = {r["day"]: r for r in rows(conn, """
+            SELECT o.delivery_date AS day,
+                   SUM(a.result = 'delivered') AS delivered, SUM(a.result = 'failed') AS failed,
+                   ROUND(SUM(CASE WHEN a.result = 'delivered' THEN a.cash_collected ELSE 0 END), 1) AS cash
+            FROM attempts a JOIN orders o ON o.id = a.order_id
+            WHERE a.voided_at IS NULL AND o.delivery_date BETWEEN ? AND ?
+            GROUP BY o.delivery_date""", (start, d))}
 
     by = lambda s: [o for o in orders if o["status"] == s]
     pending, assigned, delivered, failed = by("pending"), by("assigned"), by("delivered"), by("failed")
@@ -193,4 +202,9 @@ def overview(day: str = None, _: CurrentUser = Depends(require_admin)):
         "fleet": fleet,
         "attention": attention,
         "activity": activity,
+        "week": [
+            {"day": day, "delivered": (week.get(day) or {}).get("delivered") or 0,
+             "failed": (week.get(day) or {}).get("failed") or 0, "cash": (week.get(day) or {}).get("cash") or 0}
+            for day in [(date.fromisoformat(d) - timedelta(days=6 - k)).isoformat() for k in range(7)]
+        ],
     }

@@ -49,8 +49,8 @@ const depotIcon = L.divIcon({
     <div style="
       width: 42px;
       height: 42px;
-      border-radius: 50%;
-      background: #12291E;
+      border-radius: 14px;
+      background: #0F1F17;
       color: #ffffff;
       border: 3px solid #ffffff;
       box-shadow: 0 3px 10px rgba(15, 23, 42, 0.32);
@@ -298,8 +298,10 @@ export default function RouteMap({
           className={`${height} w-full`}
         >
           <TileLayer
-            attribution="&copy; OpenStreetMap contributors"
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; OpenStreetMap contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+            url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+            subdomains="abcd"
+            maxZoom={19}
           />
 
           <FitRouteBounds points={mapBoundsPoints} />

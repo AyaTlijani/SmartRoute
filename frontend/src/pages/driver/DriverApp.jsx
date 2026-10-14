@@ -78,29 +78,29 @@ export default function DriverApp() {
   const closed = state === "finished" || state === "reconciled";
 
   return (
-    <div className="min-h-screen bg-paper">
-      <header className="sticky top-0 z-[1100] bg-ink text-white">
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-[1100] rounded-b-[2rem] bg-gradient-to-br from-[#1BA36A] via-brand to-brand-700 text-white shadow-float">
         <div className="mx-auto flex max-w-lg items-center justify-between px-4 py-3">
           <Logo light />
-          <button type="button" onClick={logout} className="flex items-center gap-1.5 text-sm text-ink-300 hover:text-white">
+          <button type="button" onClick={logout} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-sm font-medium text-white hover:bg-white/25">
             <LogOut className="h-4 w-4" /> Sign out
           </button>
         </div>
         {data && (
           <div className="mx-auto max-w-lg px-4 pb-4">
-            <p className="text-sm text-ink-300">{user?.full_name}, {formatDay(data.day)}</p>
+            <p className="text-sm font-medium text-white/80">Hi {user?.full_name?.split(" ")[0]}, {formatDay(data.day)}</p>
             <div className="mt-2 flex items-end justify-between">
-              <p className="text-3xl font-semibold tabular">{done.length}<span className="text-lg text-ink-300"> of {data.orders.length} stops</span></p>
+              <p className="text-4xl font-extrabold tabular">{done.length}<span className="text-lg font-semibold text-white/75"> of {data.orders.length} stops</span></p>
               <div className="text-right">
-                <p className="text-lg font-semibold tabular">{dt(data.stats.cash_collected)}</p>
-                <p className="text-xs text-ink-300">of {dt(data.stats.cash_expected)} to collect</p>
+                <p className="text-xl font-extrabold tabular">{dt(data.stats.cash_collected)}</p>
+                <p className="text-xs text-white/75">of {dt(data.stats.cash_expected)} to collect</p>
               </div>
             </div>
-            <div className="mt-3 flex h-1.5 overflow-hidden rounded-full bg-ink-700">
-              <span className="bg-emerald-500" style={{ width: `${data.orders.length ? (100 * data.stats.delivered) / data.orders.length : 0}%` }} />
-              <span className="bg-red-500" style={{ width: `${data.orders.length ? (100 * data.stats.failed) / data.orders.length : 0}%` }} />
+            <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-white/25">
+              <span className="bg-white" style={{ width: `${data.orders.length ? (100 * data.stats.delivered) / data.orders.length : 0}%` }} />
+              <span className="bg-sun" style={{ width: `${data.orders.length ? (100 * data.stats.failed) / data.orders.length : 0}%` }} />
             </div>
-            {state === "on_road" && data.route && data.orders.some((o) => o.status === "assigned" && o.stop_number) && <p className="mt-2 text-xs text-ink-300">Back at {data.depot_name} around {data.route.end_time}</p>}
+            {state === "on_road" && data.route && data.orders.some((o) => o.status === "assigned" && o.stop_number) && <p className="mt-2 text-xs text-white/80">Back at {data.depot_name} around {data.route.end_time}</p>}
           </div>
         )}
       </header>
@@ -108,7 +108,7 @@ export default function DriverApp() {
       <main className="mx-auto max-w-lg px-4 pb-28 pt-4">
         <ErrorBanner error={error} onClose={() => setError(null)} />
         {!data ? <Loading label="Loading your deliveries" /> : data.orders.length === 0 && !closed ? (
-          <div className="rounded-2xl bg-white shadow-card p-6 text-center">
+          <div className="rounded-3xl bg-white p-6 text-center shadow-card">
             <Package className="mx-auto h-8 w-8 text-ink-300" />
             <p className="mt-3 font-semibold">No deliveries assigned today</p>
             <p className="mt-1 text-sm text-ink-500">When dispatch plans your route it appears here. This page refreshes on its own.</p>
@@ -125,7 +125,7 @@ export default function DriverApp() {
           <>
             {closed && <DayClosed data={data} />}
             <DayMap data={data} next={next} />
-            <div className="my-4 grid grid-cols-2 rounded-xl bg-mint p-1 text-sm font-medium" role="tablist">
+            <div className="my-4 grid grid-cols-2 rounded-full bg-white p-1 text-sm font-semibold shadow-card" role="tablist">
               {[["route", `To do (${todo.length})`], ["done", `Done (${done.length})`]].map(([k, l]) => (
                 <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
                   className={cx("rounded-lg py-2", tab === k ? "bg-white shadow-sm" : "text-ink-700")}>{l}</button>
@@ -156,7 +156,7 @@ export default function DriverApp() {
               <ul className="space-y-2">
                 {done.length === 0 && <p className="py-6 text-center text-sm text-ink-500">Nothing finished yet.</p>}
                 {done.map((o) => (
-                  <li key={o.id} className="flex items-center gap-3 rounded-2xl bg-white shadow-card px-4 py-3">
+                  <li key={o.id} className="flex items-center gap-3 rounded-3xl bg-white px-4 py-3 shadow-card">
                     <span className="w-6 text-center font-semibold tabular text-ink-500">{o.stop_number ?? "–"}</span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">{o.customer_name}</p>
@@ -206,7 +206,7 @@ function DayMap({ data, next, compact }) {
   if (!stops.length) return null;
   const left = data.orders.filter((o) => o.status === "assigned" && o.stop_number).length;
   return (
-    <div className="overflow-hidden rounded-2xl bg-white shadow-card">
+    <div className="overflow-hidden rounded-3xl bg-white shadow-card">
       <RouteMap bare height={compact ? "h-[30vh]" : "h-[42vh]"}
         depot={{ coordinates: [data.depot_lng, data.depot_lat], address: data.depot_name }}
         stops={stops.map(toMapStop)} legs={routeLegs(data.orders, data.route)}
@@ -228,7 +228,7 @@ function LoadingChecklist({ data, busy, onStart }) {
   const [loaded, setLoaded] = useState({});
   const count = stops.filter((o) => loaded[o.id]).length;
   return (
-    <div className="rounded-2xl bg-white shadow-card">
+    <div className="overflow-hidden rounded-3xl bg-white shadow-card">
       <div className="border-b border-slate-200 px-4 py-3.5">
         <p className="font-semibold">Load your packages</p>
         <p className="text-[13px] text-ink-500">
@@ -267,7 +267,7 @@ function EndDay({ data, busy, onEnd }) {
   const amount = Number(String(cash).replace(",", "."));
   const unrouted = data.orders.filter((o) => o.status === "assigned" && !o.stop_number).length;
   return (
-    <div className="mb-2 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+    <div className="mb-3 rounded-3xl bg-gradient-to-br from-mint-200 to-mint-300 p-5 shadow-card">
       <p className="flex items-center gap-2 font-semibold text-emerald-900"><Check className="h-5 w-5" /> All stops done</p>
       <p className="mt-1 text-sm text-emerald-900">
         Your deliveries recorded {dt(data.stats.cash_collected)}. Count the cash you are handing to the office.
@@ -275,7 +275,7 @@ function EndDay({ data, busy, onEnd }) {
       </p>
       <label className="mt-3 block text-sm font-medium text-emerald-950">Cash handed over (DT)
         <input type="text" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)}
-          className="mt-1 block w-full rounded-md border border-emerald-300 bg-white px-3 py-3 text-lg font-semibold tabular focus:border-brand focus:outline-none" />
+          className="mt-1 block w-full rounded-2xl border border-white bg-white px-3 py-3 text-lg font-semibold tabular focus:border-brand focus:outline-none" />
       </label>
       {Number.isFinite(amount) && Math.abs(amount - data.stats.cash_collected) > 0.05 && (
         <p className="mt-1.5 text-sm text-amber-800">That is {dt(Math.abs(data.stats.cash_collected - amount))} {amount < data.stats.cash_collected ? "less" : "more"} than your deliveries recorded. The office will see the difference.</p>
@@ -289,7 +289,7 @@ function EndDay({ data, busy, onEnd }) {
 function DayClosed({ data }) {
   const ds = data.day_state;
   return (
-    <div className={cx("mb-4 rounded-lg border p-4", ds.received_at ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50")}>
+    <div className={cx("mb-4 rounded-3xl p-5 shadow-card", ds.received_at ? "bg-mint-200" : "bg-amber-50")}>
       <p className="font-semibold">{ds.received_at ? "Day closed" : "Day ended, waiting for the office"}</p>
       <p className="mt-1 text-sm">
         You declared {dt(ds.cash_declared)} at {ds.ended_at.slice(11, 16)}.
@@ -302,7 +302,7 @@ function DayClosed({ data }) {
 function Stop({ o, isNext, open, onOpen }) {
   const maps = `https://www.google.com/maps/dir/?api=1&destination=${o.lat},${o.lng}`;
   return (
-    <div className={cx("rounded-lg border bg-white", open ? (isNext ? "border-brand" : "border-ink-300") : "border-slate-200")}>
+    <div className={cx("rounded-3xl border-2 bg-white shadow-card", open ? (isNext ? "border-brand" : "border-mint-300") : "border-transparent")}>
       <button type="button" onClick={onOpen} aria-expanded={open} className="flex w-full items-center gap-3 px-4 py-3 text-left">
         <span className={cx("flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold tabular",
           isNext ? "bg-brand text-white" : "bg-slate-100 text-ink")}>{o.stop_number ?? "?"}</span>
@@ -332,10 +332,10 @@ function Stop({ o, isNext, open, onOpen }) {
             {o.unscheduled_reason && <p className="rounded-md bg-amber-50 px-2 py-1.5 text-amber-900">Not in the planned route: {o.unscheduled_reason}</p>}
           </div>
           <div className="mt-4 grid grid-cols-2 gap-2">
-            <a href={`tel:+216${o.phone}`} className="flex h-12 items-center justify-center gap-2 rounded-md border border-slate-300 font-medium">
+            <a href={`tel:+216${o.phone}`} className="flex h-12 items-center justify-center gap-2 rounded-full bg-mint font-semibold text-brand-700">
               <Phone className="h-4 w-4" /> Call
             </a>
-            <a href={maps} target="_blank" rel="noreferrer" className="flex h-12 items-center justify-center gap-2 rounded-md border border-slate-300 font-medium">
+            <a href={maps} target="_blank" rel="noreferrer" className="flex h-12 items-center justify-center gap-2 rounded-full bg-mint font-semibold text-brand-700">
               <Navigation className="h-4 w-4" /> Navigate
             </a>
           </div>
@@ -348,7 +348,7 @@ function Stop({ o, isNext, open, onOpen }) {
 function Sheet({ title, onClose, children }) {
   return (
     <div className="fixed inset-0 z-[2000] flex items-end justify-center bg-ink/50" onMouseDown={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-lg rounded-t-2xl bg-white px-5 pb-8 pt-5" onMouseDown={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-lg rounded-t-[2rem] bg-white px-5 pb-8 pt-5" onMouseDown={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button type="button" onClick={onClose} className="text-sm text-ink-500">Cancel</button>
@@ -405,12 +405,12 @@ function DeliverSheet({ order, onClose, onDone }) {
       <label className="block text-sm font-medium">
         Cash collected (DT)
         <input type="text" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)}
-          className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-3 text-xl font-semibold tabular focus:border-brand focus:outline-none" />
+          className="mt-1 block w-full rounded-2xl border border-mint-200 px-4 py-3 text-xl font-semibold tabular focus:border-brand focus:outline-none" />
       </label>
       {Number.isFinite(amount) && amount < order.cod_amount && (
         <p className="mt-1.5 text-sm text-amber-800">{dt(order.cod_amount - amount)} less than the {dt(order.cod_amount)} due. Dispatch will see the gap.</p>
       )}
-      <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-md border border-dashed border-slate-300 p-3">
+      <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-2xl border-2 border-dashed border-mint-300 p-3">
         <input type="file" accept="image/*" capture="environment" className="sr-only" onChange={(e) => pick(e.target.files?.[0])} />
         {preview ? <img src={preview} alt="Proof of delivery" className="h-16 w-16 rounded object-cover" />
           : <span className="flex h-16 w-16 items-center justify-center rounded bg-slate-100"><Camera className="h-6 w-6 text-ink-500" /></span>}
@@ -453,13 +453,13 @@ function FailSheet({ order, reasons, onClose, onDone }) {
       <div className="grid grid-cols-2 gap-2">
         {reasons.map((r) => (
           <button key={r} type="button" onClick={() => setReason(r)} aria-pressed={reason === r}
-            className={cx("h-12 rounded-md border px-2 text-sm font-medium", reason === r ? "border-red-600 bg-red-50 text-red-800" : "border-slate-300")}>
+            className={cx("h-12 rounded-full border-2 px-2 text-sm font-semibold", reason === r ? "border-red-500 bg-red-50 text-red-800" : "border-mint-200")}>
             {r}
           </button>
         ))}
       </div>
       <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="Note for dispatch (optional)"
-        className="mt-3 block w-full rounded-md border border-slate-300 px-3 py-3 focus:border-brand focus:outline-none" />
+        className="mt-3 block w-full rounded-2xl border border-mint-200 px-4 py-3 focus:border-brand focus:outline-none" />
       <Button variant="danger" size="lg" className="mt-5 w-full" disabled={!reason} loading={busy} onClick={submit}>Mark as failed</Button>
     </Sheet>
   );

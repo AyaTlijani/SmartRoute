@@ -4,16 +4,31 @@
 
 @layer base {
   html { -webkit-tap-highlight-color: transparent; }
-  body { @apply bg-paper font-sans text-ink antialiased; font-feature-settings: "tnum" 0; }
+  body {
+    @apply font-sans text-ink antialiased;
+    background: radial-gradient(1200px 600px at 0% 0%, #E6F4EC 0%, transparent 60%),
+                linear-gradient(180deg, #F1F8F3 0%, #F7FAF7 100%);
+    background-attachment: fixed;
+  }
   .tabular { font-variant-numeric: tabular-nums; }
   :focus-visible { @apply outline-none ring-2 ring-brand ring-offset-2; }
-  /* iOS zooms into inputs smaller than 16px */
   input, select, textarea { font-size: 16px; }
   @media (min-width: 640px) { input, select, textarea { font-size: 14px; } }
+}
+
+@layer components {
+  /* Tables: mint header band with rounded ends, airy rows. */
+  .table-soft { @apply w-full text-left text-sm; }
+  .table-soft thead th { @apply bg-mint px-3 py-2.5 text-[13px] font-semibold text-ink-700 first:rounded-l-xl last:rounded-r-xl; }
+  .table-soft tbody td { @apply border-b border-slate-100 px-3 py-3 align-top; }
+  .table-soft tbody tr:last-child td { @apply border-b-0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-.leaflet-container { font-family: inherit; }
+.leaflet-container { font-family: inherit; background: #EEF3EF; }
+.leaflet-control-zoom { border: none !important; box-shadow: 0 6px 18px rgba(15,31,23,.12) !important; border-radius: 14px !important; overflow: hidden; }
+.leaflet-control-zoom a { width: 34px !important; height: 34px !important; line-height: 34px !important; color: #0F1F17 !important; }
+.leaflet-popup-content-wrapper { border-radius: 16px; box-shadow: 0 10px 30px rgba(15,31,23,.14); }

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { KeyRound, Pencil, UserPlus, Users } from "lucide-react";
+import { Bike, Car, KeyRound, MapPin, Pencil, Phone, UserPlus, Users } from "lucide-react";
 import { api, errorText } from "../../api";
 import {
-  Badge, Button, EmptyState, ErrorBanner, Field, Input, Loading, Modal, PageHeader, Panel, Select, cx, useToast,
+  Button, EmptyState, ErrorBanner, Field, Input, Loading, Modal, PageHeader, Panel, Select, cx, useToast,
 } from "../../components/ui";
 
 export default function Drivers() {
@@ -38,59 +38,16 @@ export default function Drivers() {
       {!drivers ? <Loading /> : drivers.length === 0 ? (
         <Panel><EmptyState icon={Users} title="No drivers yet" action={<Button onClick={() => setEditing({})}>Add driver</Button>} /></Panel>
       ) : (
-        <Panel bodyClass="">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-left text-sm">
-              <thead className="border-b border-slate-200 text-[13px] text-ink-500">
-                <tr>
-                  <th className="px-5 py-2.5 font-medium">Driver</th>
-                  <th className="py-2.5 pr-4 font-medium">Login</th>
-                  <th className="py-2.5 pr-4 font-medium">Zones</th>
-                  <th className="py-2.5 pr-4 font-medium">Starts from</th>
-                  <th className="py-2.5 pr-4 text-right font-medium">Today</th>
-                  <th className="py-2.5 pr-4 text-right font-medium">Delivered (all time)</th>
-                  <th className="py-2.5 pr-4 font-medium">Status</th>
-                  <th className="py-2.5 pr-5"><span className="sr-only">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {drivers.map((d) => (
-                  <tr key={d.id} className={cx("align-top", !d.active && "text-ink-500")}>
-                    <td className="px-5 py-3">
-                      <span className="font-medium text-ink">{d.name}</span>
-                      <span className="block tabular text-[13px] text-ink-500">{d.phone}, {d.vehicle}</span>
-                    </td>
-                    <td className="py-3 pr-4 font-mono text-[13px]">{d.username || "No account"}</td>
-                    <td className="py-3 pr-4">
-                      <div className="flex max-w-[220px] flex-wrap gap-1">{d.zones.split(",").map((z) => <Badge key={z}>{z}</Badge>)}</div>
-                    </td>
-                    <td className="py-3 pr-4">{d.depot_name}</td>
-                    <td className="py-3 pr-4 text-right tabular">{d.today_orders} / {d.max_orders}</td>
-                    <td className="py-3 pr-4 text-right tabular">
-                      {d.total_attempts ? `${Math.round((100 * d.total_delivered) / d.total_attempts)}%` : "–"}
-                      <span className="block text-[13px] text-ink-500">{d.total_attempts} attempts</span>
-                    </td>
-                    <td className="py-3 pr-4">
-                      <button type="button" role="switch" aria-checked={!!d.active} onClick={() => toggle(d)}
-                        className="flex items-center gap-2 text-[13px]" aria-label={`${d.name} active`}>
-                        <span className={cx("relative h-5 w-9 rounded-full transition-colors", d.active ? "bg-emerald-600" : "bg-slate-300")}>
-                          <span className={cx("absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all", d.active ? "left-[18px]" : "left-0.5")} />
-                        </span>
-                        {d.active ? "Active" : "Inactive"}
-                      </button>
-                    </td>
-                    <td className="py-3 pr-5">
-                      <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="sm" icon={Pencil} onClick={() => setEditing(d)} disabled={!meta}>Edit</Button>
-                        <Button variant="ghost" size="sm" icon={KeyRound} onClick={() => setPassword(d)}>Password</Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+          {drivers.map((d) => <DriverCard key={d.id} d={d} meta={meta} onToggle={() => toggle(d)}
+            onEdit={() => setEditing(d)} onPassword={() => setPassword(d)} />)}
+          <button type="button" onClick={() => setEditing({})} disabled={!meta}
+            className="flex min-h-[260px] flex-col items-center justify-center gap-3 rounded-3xl border-2 border-dashed border-mint-300 bg-white/50 text-ink-700 transition-colors hover:border-brand hover:bg-white">
+            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-mint-200 text-brand-700"><UserPlus className="h-6 w-6" /></span>
+            <span className="font-semibold">Add a driver</span>
+            <span className="max-w-[220px] text-center text-[13px] text-ink-500">Creates their login so they can open the driver app on their phone.</span>
+          </button>
+        </div>
       )}
       {editing && meta && (
         <DriverForm driver={editing} meta={meta} onClose={() => setEditing(null)}
@@ -98,6 +55,60 @@ export default function Drivers() {
       )}
       {password && <PasswordForm driver={password} onClose={() => setPassword(null)} onSaved={() => { setPassword(null); toast("Password changed; the driver must sign in again"); }} />}
     </>
+  );
+}
+
+function DriverCard({ d, meta, onToggle, onEdit, onPassword }) {
+  const load = d.max_orders ? Math.min(100, (100 * d.today_orders) / d.max_orders) : 0;
+  const rate = d.total_attempts ? Math.round((100 * d.total_delivered) / d.total_attempts) : null;
+  const Vehicle = d.vehicle === "car" || d.vehicle === "van" ? Car : Bike;
+  return (
+    <article className={cx("flex flex-col rounded-3xl border border-white/60 bg-white p-5 shadow-card transition-opacity", !d.active && "opacity-60")}>
+      <div className="flex items-start gap-3">
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-mint-200 to-mint-300 text-base font-bold text-brand-700">
+          {d.name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-base font-bold">{d.name}</h2>
+          <p className="font-mono text-[13px] text-ink-500">@{d.username || "no account"}</p>
+        </div>
+        <button type="button" role="switch" aria-checked={!!d.active} onClick={onToggle} aria-label={`${d.name} active`}
+          title={d.active ? "Active" : "Inactive"}
+          className={cx("relative mt-1 h-6 w-11 shrink-0 rounded-full transition-colors", d.active ? "bg-brand" : "bg-slate-300")}>
+          <span className={cx("absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all", d.active ? "left-[22px]" : "left-0.5")} />
+        </button>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-1.5">
+        {d.zones.split(",").map((z) => (
+          <span key={z} className="rounded-full bg-mint px-2.5 py-1 text-xs font-semibold text-brand-700">{z}</span>
+        ))}
+      </div>
+
+      <ul className="mt-4 space-y-1.5 text-[13px] text-ink-700">
+        <li className="flex items-center gap-2"><MapPin className="h-4 w-4 text-ink-300" aria-hidden="true" />{d.depot_name}</li>
+        <li className="flex items-center gap-2"><Phone className="h-4 w-4 text-ink-300" aria-hidden="true" /><span className="tabular">{d.phone}</span></li>
+        <li className="flex items-center gap-2 capitalize"><Vehicle className="h-4 w-4 text-ink-300" aria-hidden="true" />{d.vehicle}</li>
+      </ul>
+
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <div className="rounded-2xl bg-mint-50 px-3.5 py-3">
+          <p className="text-xs font-medium text-ink-500">Today</p>
+          <p className="text-lg font-extrabold tabular">{d.today_orders}<span className="text-sm font-semibold text-ink-500"> / {d.max_orders}</span></p>
+          <div className="mt-1 h-1.5 rounded-full bg-mint-200"><div className="h-full rounded-full bg-brand" style={{ width: `${load}%` }} /></div>
+        </div>
+        <div className="rounded-2xl bg-mint-50 px-3.5 py-3">
+          <p className="text-xs font-medium text-ink-500">Delivered, all time</p>
+          <p className="text-lg font-extrabold tabular">{rate === null ? "–" : `${rate}%`}</p>
+          <p className="text-xs tabular text-ink-500">{d.total_attempts} attempts</p>
+        </div>
+      </div>
+
+      <div className="mt-4 flex gap-2 border-t border-slate-100 pt-4">
+        <Button variant="secondary" size="sm" icon={Pencil} onClick={onEdit} disabled={!meta} className="flex-1">Edit</Button>
+        <Button variant="secondary" size="sm" icon={KeyRound} onClick={onPassword} className="flex-1">Password</Button>
+      </div>
+    </article>
   );
 }
 

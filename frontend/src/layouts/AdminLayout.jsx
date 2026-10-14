@@ -1,12 +1,12 @@
-import React, { useState } from "react";
-import { NavLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
 import {
-  BarChart3, ChevronLeft, ChevronRight, FileSpreadsheet, LayoutDashboard, LogOut,
+  BarChart3, Bell, CalendarDays, ChevronLeft, ChevronRight, FileSpreadsheet, LayoutDashboard, LogOut,
   Menu, Package, RotateCcw, Route, Users, X,
 } from "lucide-react";
 import { useAuth } from "../auth";
 import { api, errorText, formatDay, setToken, shiftDay, todayISO } from "../api";
-import { Button, ErrorBanner, Modal, cx } from "../components/ui";
+import { Button, ErrorBanner, HeaderExtrasContext, Modal, cx } from "../components/ui";
 
 const NAV = [
   { to: "/admin", label: "Overview", icon: LayoutDashboard, end: true },
@@ -17,18 +17,24 @@ const NAV = [
   { to: "/admin/analytics", label: "Analytics", icon: BarChart3 },
 ];
 
-export function Logo({ light }) {
+export function Logo({ light, size = "md" }) {
+  const box = size === "lg" ? "h-11 w-11" : "h-9 w-9";
   return (
     <div className="flex items-center gap-2.5">
-      <svg viewBox="0 0 32 32" className="h-8 w-8 shrink-0" aria-hidden="true">
-        <rect width="32" height="32" rx="8" fill="#16855A" />
-        <path d="M9 22c0-4 3-5 7-5s7-1 7-5" stroke="white" strokeWidth="2.6" fill="none" strokeLinecap="round" />
-        <circle cx="9" cy="22" r="2.6" fill="white" />
-        <circle cx="23" cy="12" r="2.6" fill="white" />
+      <svg viewBox="0 0 40 40" className={cx(box, "shrink-0")} aria-hidden="true">
+        <rect width="40" height="40" rx="12" fill="#16935C" />
+        <path d="M11 27c0-5 4-6.5 9-6.5s9-1.5 9-6.5" stroke="#fff" strokeWidth="3.2" fill="none" strokeLinecap="round" />
+        <circle cx="11" cy="27" r="3.4" fill="#fff" />
+        <circle cx="29" cy="14" r="3.4" fill="#A8D86A" />
       </svg>
-      <span className={cx("text-xl font-extrabold tracking-tight", light ? "text-white" : "text-ink")}>SmartRoute</span>
+      <span className={cx("font-extrabold tracking-tight", size === "lg" ? "text-[26px]" : "text-[22px]",
+        light ? "text-white" : "text-ink")}>SmartRoute</span>
     </div>
   );
+}
+
+function initials(name) {
+  return (name || "A").split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 }
 
 function NavItem({ item, onClick }) {
@@ -40,12 +46,13 @@ function NavItem({ item, onClick }) {
       onClick={onClick}
       className={({ isActive }) =>
         cx(
-          "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[15px] transition-colors",
-          isActive ? "bg-mint-200 font-semibold text-ink" : "font-medium text-ink-700 hover:bg-white/70 hover:text-ink"
+          "flex items-center gap-3.5 rounded-2xl px-4 py-3 text-[15px] transition-colors",
+          isActive ? "bg-mint-300/80 font-bold text-ink shadow-[inset_0_0_0_1px_rgba(255,255,255,0.6)]"
+            : "font-medium text-ink-700 hover:bg-white/60 hover:text-ink"
         )
       }
     >
-      <Icon className="h-5 w-5" aria-hidden="true" />
+      <Icon className="h-[22px] w-[22px] text-brand-700" strokeWidth={1.8} aria-hidden="true" />
       {item.label}
     </NavLink>
   );
@@ -82,34 +89,61 @@ function Sidebar({ onNavigate }) {
   const { user, logout } = useAuth();
   const [resetting, setResetting] = useState(false);
   return (
-    <div className="flex h-full flex-col border-r border-mint-200 bg-mint px-4 py-6">
-      <div className="px-2 pb-8">
-        <Logo />
-        <p className="mt-1 pl-[42px] text-xs font-medium text-ink-500">Dispatch console</p>
-      </div>
-      <nav className="flex flex-col gap-1" aria-label="Main">
+    <div className="flex h-full flex-col bg-gradient-to-b from-[#E6F5EC] to-[#D9F0E3] px-4 py-7">
+      <div className="px-3 pb-10"><Logo size="lg" /></div>
+      <nav className="flex flex-col gap-1.5" aria-label="Main">
         {NAV.map((item) => <NavItem key={item.to} item={item} onClick={onNavigate} />)}
       </nav>
-      <div className="mt-auto rounded-2xl bg-white/70 px-4 py-4">
+      <div className="mt-auto rounded-3xl bg-white/75 p-4 shadow-[0_6px_18px_rgba(15,31,23,0.06)]">
         <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand text-sm font-bold text-white" aria-hidden="true">
-            {(user?.full_name || "A").split(" ").map((w) => w[0]).slice(0, 2).join("")}
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand text-sm font-bold text-white" aria-hidden="true">
+            {initials(user?.full_name)}
           </span>
           <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold text-ink">{user?.full_name}</span>
+            <span className="block truncate text-sm font-bold text-ink">{user?.full_name}</span>
             <span className="block text-xs text-ink-500">Administrator</span>
           </span>
         </div>
-        <button type="button" onClick={logout}
-          className="mt-3 flex items-center gap-2 text-sm font-medium text-ink-700 hover:text-ink">
-          <LogOut className="h-4 w-4" aria-hidden="true" /> Sign out
-        </button>
-        <button type="button" onClick={() => setResetting(true)}
-          className="mt-2 flex items-center gap-2 text-sm font-medium text-ink-700 hover:text-ink">
-          <RotateCcw className="h-4 w-4" aria-hidden="true" /> Reset demo data
-        </button>
+        <div className="mt-3 flex flex-col gap-1.5">
+          <button type="button" onClick={logout} className="flex items-center gap-2 text-sm font-medium text-ink-700 hover:text-ink">
+            <LogOut className="h-4 w-4" aria-hidden="true" /> Sign out
+          </button>
+          <button type="button" onClick={() => setResetting(true)} className="flex items-center gap-2 text-sm font-medium text-ink-700 hover:text-ink">
+            <RotateCcw className="h-4 w-4" aria-hidden="true" /> Reset demo data
+          </button>
+        </div>
       </div>
       {resetting && <ResetDemo onClose={() => setResetting(false)} />}
+    </div>
+  );
+}
+
+// Top-right of every admin page: alerts bell and avatar.
+function HeaderExtras() {
+  const { user } = useAuth();
+  const [alerts, setAlerts] = useState(0);
+  useEffect(() => {
+    const load = () => api.get("/overview", { params: { day: todayISO() } })
+      .then((r) => setAlerts(r.data.attention.filter((a) => a.level !== "info").length)).catch(() => {});
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="flex items-center gap-3">
+      <Link to="/admin" aria-label={`${alerts} items need attention`}
+        className="relative flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-card hover:bg-mint-50">
+        <Bell className="h-5 w-5 text-ink" />
+        {alerts > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-bold text-white ring-2 ring-white">
+            {alerts}
+          </span>
+        )}
+      </Link>
+      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-brand to-brand-700 text-sm font-bold text-white shadow-card ring-2 ring-white"
+        title={user?.full_name} aria-hidden="true">
+        {initials(user?.full_name)}
+      </span>
     </div>
   );
 }
@@ -121,18 +155,17 @@ export default function AdminLayout() {
   const current = NAV.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)));
 
   return (
-    <div className="min-h-screen lg:pl-64">
-      <aside className="fixed inset-y-0 left-0 z-[1200] hidden w-64 lg:block">
+    <div className="min-h-screen lg:pl-72">
+      <aside className="fixed inset-y-0 left-0 z-[1200] hidden w-72 lg:block">
         <Sidebar />
       </aside>
 
-      {/* Mobile top bar + drawer */}
-      <div className="sticky top-0 z-[1100] flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 lg:hidden">
-        <button type="button" onClick={() => setOpen(true)} aria-label="Open menu" className="rounded p-1.5 hover:bg-slate-100">
+      <div className="sticky top-0 z-[1100] flex items-center justify-between bg-[#E6F5EC]/95 px-4 py-3 backdrop-blur lg:hidden">
+        <button type="button" onClick={() => setOpen(true)} aria-label="Open menu" className="rounded-full p-2 hover:bg-white/70">
           <Menu className="h-5 w-5" />
         </button>
-        <span className="text-sm font-semibold">{current?.label}</span>
-        <span className="w-8" />
+        <span className="text-sm font-bold">{current?.label}</span>
+        <span className="w-9" />
       </div>
       {open && (
         <div className="fixed inset-0 z-[1300] lg:hidden">
@@ -140,15 +173,17 @@ export default function AdminLayout() {
           <div className="absolute inset-y-0 left-0 w-72">
             <Sidebar onNavigate={() => setOpen(false)} />
             <button type="button" onClick={() => setOpen(false)} aria-label="Close menu"
-              className="absolute right-2 top-3 rounded p-1.5 text-ink hover:bg-white/70">
+              className="absolute right-3 top-4 rounded-full p-1.5 text-ink hover:bg-white/70">
               <X className="h-5 w-5" />
             </button>
           </div>
         </div>
       )}
 
-      <main className="mx-auto max-w-[1280px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-        <Outlet context={{ day, setDay }} />
+      <main className="mx-auto max-w-[1320px] px-4 py-6 sm:px-6 lg:px-10 lg:py-9">
+        <HeaderExtrasContext.Provider value={<HeaderExtras />}>
+          <Outlet context={{ day, setDay }} />
+        </HeaderExtrasContext.Provider>
       </main>
     </div>
   );
@@ -156,27 +191,28 @@ export default function AdminLayout() {
 
 export const useDay = () => useOutletContext();
 
-// Delivery-day switcher used in page headers.
+// Delivery-day pill used in page headers.
 export function DayPicker() {
   const { day, setDay } = useDay();
   const today = todayISO();
   return (
-    <div className="flex items-center rounded-xl bg-white shadow-card">
+    <div className="flex h-11 items-center rounded-full bg-white px-1 shadow-card">
       <button type="button" onClick={() => setDay(shiftDay(day, -1))} aria-label="Previous day"
-        className="flex h-10 w-10 items-center justify-center rounded-xl text-ink-500 hover:bg-slate-50">
+        className="flex h-9 w-9 items-center justify-center rounded-full text-ink-500 hover:bg-mint-50">
         <ChevronLeft className="h-4 w-4" />
       </button>
-      <label className="relative flex h-10 cursor-pointer items-center border-x border-slate-100 px-3 text-sm font-semibold tabular">
+      <label className="relative flex cursor-pointer items-center gap-2 px-2 text-sm font-semibold tabular">
+        <CalendarDays className="h-4 w-4 text-brand-700" aria-hidden="true" />
         {day === today ? `Today, ${formatDay(day)}` : formatDay(day)}
         <input type="date" value={day} onChange={(e) => e.target.value && setDay(e.target.value)}
           className="absolute inset-0 cursor-pointer opacity-0" aria-label="Delivery day" />
       </label>
       <button type="button" onClick={() => setDay(shiftDay(day, 1))} aria-label="Next day"
-        className="flex h-10 w-10 items-center justify-center rounded-xl text-ink-500 hover:bg-slate-50">
+        className="flex h-9 w-9 items-center justify-center rounded-full text-ink-500 hover:bg-mint-50">
         <ChevronRight className="h-4 w-4" />
       </button>
       {day !== today && (
-        <button type="button" onClick={() => setDay(today)} className="h-10 rounded-r-xl border-l border-slate-100 px-3 text-sm font-semibold text-brand hover:bg-slate-50">
+        <button type="button" onClick={() => setDay(today)} className="ml-1 h-9 rounded-full bg-mint px-3 text-sm font-semibold text-brand-700 hover:bg-mint-200">
           Today
         </button>
       )}

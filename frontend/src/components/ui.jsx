@@ -12,50 +12,96 @@ export function cx(...parts) {
 
 // ---------------------------------------------------------------- layout
 
+// Pages put their own actions on the right; the admin layout adds the
+// shared top-right cluster (alerts, date, avatar) through this context.
+export const HeaderExtrasContext = createContext(null);
+
 export function PageHeader({ title, description, actions, children }) {
+  const extras = useContext(HeaderExtrasContext);
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
       <div className="min-w-0">
-        <h1 className="text-[26px] font-bold leading-tight tracking-tight text-ink">{title}</h1>
-        {description && <p className="mt-1 max-w-2xl text-sm text-ink-500">{description}</p>}
+        <h1 className="text-[28px] font-extrabold leading-tight tracking-tight text-ink sm:text-[32px]">{title}</h1>
+        {description && <p className="mt-1 max-w-2xl text-[15px] text-ink-500">{description}</p>}
         {children}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      <div className="flex flex-wrap items-center gap-3">
+        {actions}
+        {extras}
+      </div>
     </div>
   );
 }
 
-export function Panel({ title, description, actions, children, className, bodyClass = "p-5", id }) {
+export function Panel({ title, description, actions, children, className, bodyClass = "px-6 pb-6", id, tone = "white" }) {
+  const tones = {
+    white: "bg-white",
+    mint: "bg-gradient-to-br from-mint-200 to-mint-300",
+  };
   return (
-    <section id={id} className={cx("overflow-hidden rounded-2xl bg-white shadow-card", className)}>
+    <section id={id} className={cx("overflow-hidden rounded-3xl border border-white/60 shadow-card", tones[tone], className)}>
       {(title || actions) && (
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+        <header className="flex flex-wrap items-start justify-between gap-3 px-6 pb-3 pt-5">
           <div className="min-w-0">
-            {title && <h2 className="text-base font-bold text-ink">{title}</h2>}
+            {title && <h2 className="text-lg font-bold text-ink">{title}</h2>}
             {description && <p className="mt-0.5 text-[13px] text-ink-500">{description}</p>}
           </div>
           {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
         </header>
       )}
-      <div className={bodyClass}>{children}</div>
+      <div className={cx(!title && !actions && bodyClass === "px-6 pb-6" ? "p-6" : bodyClass)}>{children}</div>
     </section>
   );
 }
 
-export function Metric({ label, value, detail, tone }) {
-  const tones = { good: "text-emerald-700", bad: "text-red-700", warn: "text-amber-700", brand: "text-brand" };
+export function IconBadge({ icon: Icon, tone = "mint", size = "md" }) {
+  const tones = {
+    mint: "bg-mint-200 text-brand-700",
+    white: "bg-white/80 text-brand-700",
+    sun: "bg-amber-100 text-amber-700",
+    red: "bg-red-100 text-red-700",
+    sky: "bg-sky-100 text-sky-700",
+  };
+  const sizes = { sm: "h-9 w-9", md: "h-11 w-11", lg: "h-14 w-14" };
   return (
-    <div className="min-w-0">
-      <p className="text-[13px] text-ink-500">{label}</p>
-      <p className={cx("mt-1 text-[26px] font-bold leading-none tabular", tones[tone] || "text-ink")}>{value}</p>
-      {detail && <p className="mt-0.5 truncate text-xs text-ink-500">{detail}</p>}
+    <span className={cx("inline-flex shrink-0 items-center justify-center rounded-full", tones[tone], sizes[size])}>
+      <Icon className={size === "lg" ? "h-6 w-6" : "h-5 w-5"} aria-hidden="true" />
+    </span>
+  );
+}
+
+export function Metric({ label, value, detail, tone, icon }) {
+  const tones = { good: "text-brand", bad: "text-red-700", warn: "text-amber-700", brand: "text-brand" };
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      {icon && <IconBadge icon={icon} />}
+      <div className="min-w-0">
+        <p className="text-[13px] font-medium text-ink-500">{label}</p>
+        <p className={cx("mt-0.5 text-2xl font-extrabold leading-tight tabular", tones[tone] || "text-ink")}>{value}</p>
+        {detail && <p className="truncate text-xs text-ink-500">{detail}</p>}
+      </div>
+    </div>
+  );
+}
+
+// A single bubbly number with its icon (Dispatch, Orders, Analytics headers).
+export function StatCard({ label, value, detail, icon, tone }) {
+  const tones = { good: "text-brand", bad: "text-red-700", warn: "text-amber-700" };
+  return (
+    <div className="flex items-center gap-4 rounded-3xl border border-white/60 bg-white px-5 py-4 shadow-card">
+      {icon && <IconBadge icon={icon} tone={tone === "warn" ? "sun" : tone === "bad" ? "red" : "mint"} />}
+      <div className="min-w-0">
+        <p className="text-[13px] font-medium text-ink-500">{label}</p>
+        <p className={cx("text-2xl font-extrabold leading-tight tabular", tones[tone] || "text-ink")}>{value}</p>
+        {detail && <p className="text-xs leading-snug text-ink-500">{detail}</p>}
+      </div>
     </div>
   );
 }
 
 export function MetricStrip({ children }) {
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-5 rounded-2xl bg-white px-6 py-5 shadow-card sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-x-6 gap-y-5 rounded-3xl border border-white/60 bg-white px-6 py-5 shadow-card sm:grid-cols-3 lg:grid-cols-5">
       {children}
     </div>
   );
@@ -64,10 +110,10 @@ export function MetricStrip({ children }) {
 export function EmptyState({ icon: Icon, title, children, action }) {
   return (
     <div className="flex flex-col items-center px-6 py-12 text-center">
-      {Icon && <Icon className="h-8 w-8 text-ink-300" aria-hidden="true" />}
-      <p className="mt-3 text-[15px] font-semibold text-ink">{title}</p>
+      {Icon && <IconBadge icon={Icon} size="lg" />}
+      <p className="mt-4 text-base font-bold text-ink">{title}</p>
       {children && <p className="mt-1 max-w-md text-sm text-ink-500">{children}</p>}
-      {action && <div className="mt-4">{action}</div>}
+      {action && <div className="mt-5">{action}</div>}
     </div>
   );
 }
@@ -75,20 +121,20 @@ export function EmptyState({ icon: Icon, title, children, action }) {
 // ---------------------------------------------------------------- controls
 
 const VARIANT = {
-  primary: "bg-brand text-white hover:bg-brand-600 active:bg-brand-700 disabled:bg-brand/40",
-  secondary: "border border-slate-300 bg-white text-ink hover:bg-slate-50 disabled:text-ink-300",
+  primary: "bg-brand text-white shadow-[0_6px_16px_rgba(22,147,92,0.28)] hover:bg-brand-600 active:bg-brand-700 disabled:bg-brand/40 disabled:shadow-none",
+  secondary: "border border-mint-200 bg-white text-ink hover:bg-mint-50 disabled:text-ink-300",
   ghost: "text-ink-700 hover:bg-slate-100 disabled:text-ink-300",
   danger: "bg-red-700 text-white hover:bg-red-800 disabled:bg-red-300",
   success: "bg-emerald-700 text-white hover:bg-emerald-800 disabled:bg-emerald-300",
 };
-const SIZE = { sm: "h-8 px-3 text-[13px]", md: "h-9 px-4 text-sm", lg: "h-12 px-5 text-base" };
+const SIZE = { sm: "h-9 px-3.5 text-[13px]", md: "h-11 px-5 text-sm", lg: "h-12 px-6 text-base" };
 
 export function Button({ variant = "primary", size = "md", icon: Icon, loading, className, children, ...props }) {
   return (
     <button
       type="button"
       className={cx(
-        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl font-semibold transition-colors disabled:cursor-not-allowed",
+        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full font-semibold transition-colors disabled:cursor-not-allowed",
         VARIANT[variant], SIZE[size], className
       )}
       disabled={loading || props.disabled}
@@ -111,7 +157,7 @@ export function Field({ label, hint, error, children, className }) {
 }
 
 export const inputClass =
-  "block w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-ink placeholder:text-ink-300 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand disabled:bg-slate-50";
+  "block w-full rounded-2xl border border-mint-200 bg-white px-3.5 py-2.5 text-ink placeholder:text-ink-300 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand disabled:bg-slate-50";
 
 export function Input(props) {
   return <input {...props} className={cx(inputClass, props.className)} />;
@@ -189,7 +235,6 @@ export function CustomerBadge({ order }) {
   const failed = order.customer_failed || 0;
   if (failed >= 2) return <Badge tone="bad">Refused before: {failed} of {total}</Badge>;
   if (total >= 3 && failed === 0) return <Badge tone="good">Regular, {total} delivered</Badge>;
-  if (total === 0) return <Badge>New customer</Badge>;
   return null;
 }
 
