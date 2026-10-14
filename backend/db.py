@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS orders (
     eta                TEXT,
     unscheduled_reason TEXT,             -- set when the solver could not fit the stop
     retry_of           INTEGER REFERENCES orders(id),
+    leg_geometry       TEXT,             -- JSON path from the previous stop to this one
     created_at         TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS routes (
     end_time        TEXT,                -- back at the depot
     baseline_minutes INTEGER,            -- nearest-neighbour route, same matrix
     baseline_late   INTEGER,             -- stops the baseline reaches after their window
+    return_leg      TEXT,                -- JSON path from the last stop back to the depot
     PRIMARY KEY (driver_id, delivery_date)
 );
 
@@ -123,9 +125,11 @@ CREATE INDEX IF NOT EXISTS idx_attempts_order ON attempts(order_id);
 # through ALTER TABLE, so nobody has to delete their database.
 MIGRATIONS = {
     "drivers": [("active", "INTEGER NOT NULL DEFAULT 1")],
-    "orders": [("unscheduled_reason", "TEXT"), ("retry_of", "INTEGER REFERENCES orders(id)")],
+    "orders": [("unscheduled_reason", "TEXT"), ("retry_of", "INTEGER REFERENCES orders(id)"),
+               ("leg_geometry", "TEXT")],
     "attempts": [("voided_at", "TEXT")],
-    "routes": [("end_time", "TEXT"), ("baseline_minutes", "INTEGER"), ("baseline_late", "INTEGER")],
+    "routes": [("end_time", "TEXT"), ("baseline_minutes", "INTEGER"), ("baseline_late", "INTEGER"),
+               ("return_leg", "TEXT")],
 }
 
 # One retry per failed order, enforced by the database itself.

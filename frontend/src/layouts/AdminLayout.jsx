@@ -2,11 +2,11 @@ import React, { useState } from "react";
 import { NavLink, Outlet, useLocation, useOutletContext } from "react-router-dom";
 import {
   BarChart3, ChevronLeft, ChevronRight, FileSpreadsheet, LayoutDashboard, LogOut,
-  Menu, Package, Route, Users, X,
+  Menu, Package, RotateCcw, Route, Users, X,
 } from "lucide-react";
 import { useAuth } from "../auth";
-import { formatDay, shiftDay, todayISO } from "../api";
-import { cx } from "../components/ui";
+import { api, errorText, formatDay, setToken, shiftDay, todayISO } from "../api";
+import { Button, ErrorBanner, Modal, cx } from "../components/ui";
 
 const NAV = [
   { to: "/admin", label: "Overview", icon: LayoutDashboard, end: true },
@@ -51,8 +51,36 @@ function NavItem({ item, onClick }) {
   );
 }
 
+function ResetDemo({ onClose }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const reset = async () => {
+    setBusy(true);
+    try {
+      await api.post("/admin/demo/reset");
+      setToken(null); // accounts are recreated, so sign in again
+      window.location.assign("/login");
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="Reset demo data?" onClose={onClose}
+      footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="danger" loading={busy} onClick={reset}>Reset everything</Button></>}>
+      <ErrorBanner error={error} />
+      <p className="text-sm text-ink-700">
+        Deletes every order, route, delivery and driver change, then loads the demo company again: 3 weeks of history,
+        today in progress (drivers on the road, one waiting for cash confirmation) and tomorrow's orders to plan.
+      </p>
+      <p className="mt-2 text-sm text-ink-500">It takes about 10 seconds. You will be signed out.</p>
+    </Modal>
+  );
+}
+
 function Sidebar({ onNavigate }) {
   const { user, logout } = useAuth();
+  const [resetting, setResetting] = useState(false);
   return (
     <div className="flex h-full flex-col bg-ink px-3 py-4">
       <div className="px-2 pb-6">
@@ -69,7 +97,12 @@ function Sidebar({ onNavigate }) {
           className="mt-3 flex items-center gap-2 text-sm text-ink-300 hover:text-white">
           <LogOut className="h-4 w-4" aria-hidden="true" /> Sign out
         </button>
+        <button type="button" onClick={() => setResetting(true)}
+          className="mt-2 flex items-center gap-2 text-sm text-ink-300 hover:text-white">
+          <RotateCcw className="h-4 w-4" aria-hidden="true" /> Reset demo data
+        </button>
       </div>
+      {resetting && <ResetDemo onClose={() => setResetting(false)} />}
     </div>
   );
 }

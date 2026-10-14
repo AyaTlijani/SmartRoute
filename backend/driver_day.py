@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth import CurrentUser, require_admin, require_driver
+import clock
 from db import connect
 from dispatch import day_state, dispatch_view, driver_payload, FAIL_REASONS
 from planning import route_driver
@@ -51,7 +52,7 @@ def start_route(user: CurrentUser = Depends(require_driver)):
             raise HTTPException(409, "You have no deliveries assigned today.")
         conn.execute("INSERT INTO driver_days (driver_id, day, started_at) VALUES (?, ?, ?) "
                      "ON CONFLICT(driver_id, day) DO UPDATE SET started_at = excluded.started_at",
-                     (drv["id"], d, _now()))
+                     (drv["id"], d, clock.start_time(d)))
         route_driver(conn, drv, d)  # arrival times now count from the real departure time
         return _my_day_payload(conn, drv, d)
 
@@ -99,7 +100,7 @@ def end_day(req: EndDay, user: CurrentUser = Depends(require_driver)):
         conn.execute("UPDATE orders SET driver_id = NULL, status = 'pending', stop_number = NULL, eta = NULL "
                      "WHERE delivery_date = ? AND driver_id = ? AND status = 'assigned'", (d, drv["id"]))
         conn.execute("UPDATE driver_days SET ended_at = ?, cash_declared = ? WHERE driver_id = ? AND day = ?",
-                     (_now(), req.cash_declared, drv["id"], d))
+                     (clock.end_time(conn, drv["id"], d), req.cash_declared, drv["id"], d))
         return _my_day_payload(conn, drv, d)
 
 

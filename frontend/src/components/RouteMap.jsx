@@ -10,19 +10,23 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-const STATUS_COLOR = { delivered: "#047857", failed: "#B91C1C" };
+// Finished stops turn grey (a failed one keeps a red ring); the next stop is larger.
+const DONE_GREY = "#9AA5B1";
 
-function createDeliveryIcon(number, status) {
+function createDeliveryIcon(number, status, isNext) {
+  const done = status === "delivered" || status === "failed";
+  const size = isNext ? 46 : 38;
   return L.divIcon({
     className: "smartroute-marker",
     html: `
       <div style="
-        width: 38px;
-        height: 38px;
+        width: ${size}px;
+        height: ${size}px;
         border-radius: 50%;
-        background: ${STATUS_COLOR[status] || "#0B65A6"};
+        background: ${done ? DONE_GREY : "#0B65A6"};
         color: #ffffff;
-        border: 3px solid #ffffff;
+        border: 3px solid ${status === "failed" ? "#DC2626" : "#ffffff"};
+        ${isNext ? "outline: 3px solid rgba(11,101,166,0.35);" : ""}
         box-shadow: 0 3px 10px rgba(15, 23, 42, 0.30);
         display: flex;
         align-items: center;
@@ -33,8 +37,8 @@ function createDeliveryIcon(number, status) {
         line-height: 1;
       ">${number}</div>
     `,
-    iconSize: [38, 38],
-    iconAnchor: [19, 19],
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
     popupAnchor: [0, -22],
   });
 }
@@ -66,6 +70,9 @@ const depotIcon = L.divIcon({
 
 function FitRouteBounds({ points }) {
   const map = useMap();
+  // Re-fit only when the set of points changes, not on every refresh, so a
+  // driver who zoomed in keeps their view.
+  const key = points.length ? `${points.length}:${points[0]}:${points[points.length - 1]}` : "";
 
   React.useEffect(() => {
     if (!points || points.length === 0) {
@@ -83,7 +90,7 @@ function FitRouteBounds({ points }) {
       maxZoom: 16,
       animate: false,
     });
-  }, [map, points]);
+  }, [map, key]);
 
   return null;
 }
@@ -175,6 +182,8 @@ export default function RouteMap({
   straightLines = false, // geometry is an estimate, not real roads
   height = "h-[430px] sm:h-[500px]",
   bare = false,          // hide the card header/legend when a page already has one
+  legs = null,           // [{ positions: [[lng, lat], ...], done }] one per stop + the return
+  nextStop = null,       // stop_number to highlight
 }) {
   const hasDepot =
     Array.isArray(depot?.coordinates) &&
@@ -218,7 +227,12 @@ export default function RouteMap({
         ])
     : [];
 
-  const hasRoadRoute = roadRoutePoints.length > 1;
+  const legLines = Array.isArray(legs)
+    ? legs
+        .filter((l) => Array.isArray(l?.positions) && l.positions.length > 1)
+        .map((l) => ({ done: !!l.done, points: l.positions.map((p) => [Number(p[1]), Number(p[0])]) }))
+    : [];
+  const hasRoadRoute = roadRoutePoints.length > 1 || legLines.length > 0;
 
   const mapBoundsPoints = [
     depotPosition,
@@ -227,6 +241,7 @@ export default function RouteMap({
         markerPositions[stop.stop_number].display
     ),
     ...roadRoutePoints,
+    ...legLines.flatMap((l) => l.points),
   ];
 
   return (
@@ -289,7 +304,24 @@ export default function RouteMap({
 
           <FitRouteBounds points={mapBoundsPoints} />
 
-          {hasRoadRoute && (
+          {legLines.length > 0 && (
+            <>
+              {legLines.filter((l) => l.done).map((l, i) => (
+                <Polyline key={`done-${i}`} positions={l.points}
+                  pathOptions={{ color: DONE_GREY, weight: 4, opacity: 0.9, lineCap: "round", lineJoin: "round" }} />
+              ))}
+              {legLines.filter((l) => !l.done).map((l, i) => (
+                <React.Fragment key={`todo-${i}`}>
+                  <Polyline positions={l.points}
+                    pathOptions={{ color: "#ffffff", weight: 9, opacity: 0.9, lineCap: "round", lineJoin: "round" }} />
+                  <Polyline positions={l.points}
+                    pathOptions={{ color: "#0B65A6", weight: 5, opacity: 0.95, lineCap: "round", lineJoin: "round" }} />
+                </React.Fragment>
+              ))}
+            </>
+          )}
+
+          {legLines.length === 0 && hasRoadRoute && (
             <>
               <Polyline
                 positions={roadRoutePoints}
@@ -381,7 +413,8 @@ export default function RouteMap({
                   position={marker.display}
                   icon={createDeliveryIcon(
                     stop.stop_number,
-                    stop.status
+                    stop.status,
+                    stop.stop_number === nextStop
                   )}
                   zIndexOffset={
                     2000 + Number(stop.stop_number)

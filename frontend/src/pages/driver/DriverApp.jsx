@@ -11,7 +11,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Camera, Check, ChevronDown, LogOut, MapPin, Navigation, Package, Phone, RefreshCw, RotateCcw, StickyNote, Truck, X,
 } from "lucide-react";
-import { api, dt, errorText, formatDay, toMapStop } from "../../api";
+import { api, dt, errorText, formatDay, routeLegs, toMapStop } from "../../api";
 import { useAuth } from "../../auth";
 import { Logo } from "../../layouts/AdminLayout";
 import RouteMap from "../../components/RouteMap";
@@ -114,33 +114,30 @@ export default function DriverApp() {
             <p className="mt-1 text-sm text-ink-500">When dispatch plans your route it appears here. This page refreshes on its own.</p>
           </div>
         ) : state === "not_started" ? (
-          <LoadingChecklist data={data} busy={busy === "start"}
-            onStart={() => act("start", () => api.post("/me/start"), "Route started. Arrival times now count from now.")} />
+          <>
+            <DayMap data={data} next={null} compact />
+            <div className="mt-4">
+              <LoadingChecklist data={data} busy={busy === "start"}
+                onStart={() => act("start", () => api.post("/me/start"), "Route started. Arrival times now count from your departure.")} />
+            </div>
+          </>
         ) : (
           <>
             {closed && <DayClosed data={data} />}
-            <div className="mb-4 grid grid-cols-3 rounded-lg bg-slate-200 p-1 text-sm font-medium" role="tablist">
-              {[["route", `To do (${todo.length})`], ["map", "Map"], ["done", `Done (${done.length})`]].map(([k, l]) => (
+            <DayMap data={data} next={next} />
+            <div className="my-4 grid grid-cols-2 rounded-lg bg-slate-200 p-1 text-sm font-medium" role="tablist">
+              {[["route", `To do (${todo.length})`], ["done", `Done (${done.length})`]].map(([k, l]) => (
                 <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
                   className={cx("rounded-md py-2", tab === k ? "bg-white shadow-sm" : "text-ink-700")}>{l}</button>
               ))}
             </div>
 
-            {tab === "map" && (
-              <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-                <RouteMap bare height="h-[60vh]" depot={{ coordinates: [data.depot_lng, data.depot_lat], address: data.depot_name }}
-                  stops={data.orders.filter((o) => o.stop_number).map(toMapStop)} routeGeometry={data.route?.geometry}
-                  straightLines={data.route?.source !== "ors"} />
-                <p className="px-4 py-2 text-xs text-ink-500">Green stops are delivered, red failed, blue still to do. The line is your remaining route in order, not the roads.</p>
-              </div>
-            )}
-
             {tab === "route" && !closed && (
               <div className="space-y-2">
                 {routedLeft.length > 0 && (
                   <div className="flex items-center justify-between gap-3 pb-1">
-                    <p className="text-[13px] text-ink-500">Running late or took a detour?</p>
-                    <Button size="sm" variant="secondary" icon={RefreshCw} loading={busy === "replan"} onClick={replan}>Re-plan from here</Button>
+                    <p className="text-[13px] text-ink-500">Late or took a detour? Re-plan the stops ahead.</p>
+                    <Button size="sm" variant="secondary" icon={RefreshCw} loading={busy === "replan"} onClick={replan}>Re-plan</Button>
                   </div>
                 )}
                 {routedLeft.length === 0 && (
@@ -199,6 +196,28 @@ export default function DriverApp() {
         <FailSheet order={sheet.order} reasons={data.fail_reasons} onClose={() => setSheet(null)}
           onDone={() => { setSheet(null); setOpenId(null); toast(`Marked as failed: ${sheet.order.customer_name}`, "warn"); load(); }} />
       )}
+    </div>
+  );
+}
+
+// The whole day on one map: grey = done, blue = still ahead, big marker = next stop.
+function DayMap({ data, next, compact }) {
+  const stops = data.orders.filter((o) => o.stop_number);
+  if (!stops.length) return null;
+  const left = data.orders.filter((o) => o.status === "assigned" && o.stop_number).length;
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <RouteMap bare height={compact ? "h-[30vh]" : "h-[42vh]"}
+        depot={{ coordinates: [data.depot_lng, data.depot_lat], address: data.depot_name }}
+        stops={stops.map(toMapStop)} legs={routeLegs(data.orders, data.route)}
+        straightLines={data.route?.source !== "ors"} nextStop={next?.stop_number} />
+      <div className="flex items-center justify-between gap-3 px-4 py-2 text-xs text-ink-500">
+        <span className="flex items-center gap-3">
+          <span className="flex items-center gap-1"><span className="h-1 w-4 rounded-full bg-brand" />Ahead</span>
+          <span className="flex items-center gap-1"><span className="h-1 w-4 rounded-full bg-[#9AA5B1]" />Done</span>
+        </span>
+        <span>{compact ? `Your route: ${stops.length} stops` : left ? `${left} stops left` : "Route complete"}</span>
+      </div>
     </div>
   );
 }

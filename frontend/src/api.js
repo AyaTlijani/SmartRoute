@@ -96,3 +96,14 @@ export function toMapStop(o) {
     status: o.status,
   };
 }
+
+// The driver's whole day as map legs: depot → stop 1 → … → depot.
+// A leg is "done" once the stop it leads to is delivered or failed, so the
+// finished part of the route turns grey and the rest stays as planned.
+export function routeLegs(orders, route) {
+  const stops = orders.filter((o) => o.stop_number && o.leg).sort((a, b) => a.stop_number - b.stop_number);
+  const legs = stops.map((o) => ({ positions: o.leg, done: o.status !== "assigned" }));
+  const open = orders.some((o) => o.status === "assigned" && o.stop_number);
+  if (route?.return_leg) legs.push({ positions: route.return_leg, done: !open });
+  return legs;
+}

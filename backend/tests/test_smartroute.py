@@ -17,6 +17,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["ORS_API_KEY"] = ""
+os.environ["SMARTROUTE_SEED_TODAY"] = "0"  # tests start from a clean day; the lived-in demo has its own test
 
 import config  # noqa: E402
 
@@ -43,7 +44,7 @@ PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "test.db"))
-    monkeypatch.setattr(planning, "now_minutes", lambda: 0)  # "it is 9:00 AM" for every test
+    monkeypatch.setattr(planning, "now_minutes", lambda *a: 0)  # "it is 9:00 AM" for every test
     with TestClient(main.app) as c:
         yield c
 
@@ -93,6 +94,7 @@ def test_old_database_gets_accounts(tmp_path, monkeypatch):
     db.init_db()
     with db.connect() as conn:
         sample_data.seed_demo(conn)
+        conn.execute("UPDATE driver_days SET received_by = NULL")  # old databases had no driver days
         conn.execute("DELETE FROM users")
     with TestClient(main.app) as c:
         login(c, "admin", "admin123")
@@ -407,7 +409,7 @@ def test_replan_from_current_position_and_time(client, admin, monkeypatch):
     me = login(client, drv["name"].split()[0].lower(), "driver123")
     client.post("/me/start", headers=me)
 
-    monkeypatch.setattr(planning, "now_minutes", lambda: 240)  # it is now 1:00 PM
+    monkeypatch.setattr(planning, "now_minutes", lambda *a: 240)  # it is now 1:00 PM
     day = client.post("/me/replan", json={"lat": 36.81, "lng": 10.14}, headers=me).json()
     for o in day["orders"]:
         if o["stop_number"]:
@@ -436,3 +438,30 @@ def test_optimizer_mode_respects_zones_capacity_and_windows(client, admin):
     assert opt["summary"]["unassigned"] <= zones["summary"]["unassigned"]
     # Fleet-wide optimization should not drive more than the zone rule.
     assert opt["summary"]["total_driving_minutes"] <= zones["summary"]["total_driving_minutes"] * 1.02
+
+
+# ---------------------------------------------------------------- lived-in demo
+
+def test_demo_seed_is_lived_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "demo.db"))
+    db.init_db()
+    with db.connect() as conn:
+        info = sample_data.seed_demo(conn, live_today=True)
+    with TestClient(main.app) as c:
+        admin = login(c, "admin", "admin123")
+        states = {f["name"]: f["state"] for f in c.get("/overview", headers=admin).json()["fleet"]}
+        assert states["Ahmed Trabelsi"] == "on_road" and states["Youssef Gharbi"] == "finished"
+        assert states["Mehdi Jlassi"] == "not_started"
+        ov = c.get("/overview", headers=admin).json()
+        assert any("Cash handover from Youssef" in a["title"] for a in ov["attention"])
+        assert c.get("/orders", params={"day": info["tomorrow"]}, headers=admin).json()
+        past = c.get("/dispatch", params={"day": YESTERDAY}, headers=admin).json()
+        routed = [d for d in past["drivers"] if d["orders"]]
+        assert routed and all(d["day_state"]["received_at"] for d in routed)
+        assert all(o["leg"] for d in routed for o in d["orders"] if o["stop_number"])
+        # The driver sees finished stops with their legs kept, and the remaining route.
+        me = login(c, "ahmed", "driver123")
+        day = c.get("/me/day", headers=me).json()
+        done = [o for o in day["orders"] if o["status"] != "assigned"]
+        assert done and all(o["leg"] for o in done)
+        assert day["route"]["return_leg"]

@@ -88,7 +88,7 @@ export function Button({ variant = "primary", size = "md", icon: Icon, loading, 
     <button
       type="button"
       className={cx(
-        "inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors disabled:cursor-not-allowed",
+        "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-colors disabled:cursor-not-allowed",
         VARIANT[variant], SIZE[size], className
       )}
       disabled={loading || props.disabled}

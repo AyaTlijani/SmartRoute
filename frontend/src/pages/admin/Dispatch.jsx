@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AlertTriangle, Banknote, Inbox, Lock, Route as RouteIcon, Wand2 } from "lucide-react";
-import { api, dt, errorText, formatDay, toMapStop } from "../../api";
+import { api, dt, errorText, formatDay, routeLegs, toMapStop } from "../../api";
 import { DayPicker, useDay } from "../../layouts/AdminLayout";
 import RouteMap from "../../components/RouteMap";
 import OrderDetail from "../../components/OrderDetail";
@@ -262,9 +262,10 @@ function DriverRoute({ d, drivers, busy, editable, onReassign, onOpen, onReceive
             <div className="border-b border-slate-200">
               <RouteMap bare height="h-[360px] lg:h-[420px]"
                 depot={{ coordinates: [d.depot_lng, d.depot_lat], address: d.depot_name }}
-                stops={routed.map(toMapStop)} routeGeometry={r?.geometry} straightLines={r?.source !== "ors"} />
+                stops={routed.map(toMapStop)} legs={routeLegs(d.orders, r)} straightLines={r?.source !== "ors"}
+                nextStop={d.orders.find((o) => o.status === "assigned" && o.stop_number)?.stop_number} />
               <p className="px-5 py-2 text-xs text-ink-500">
-                {state === "on_road" ? "The line shows the remaining route from the driver's last known position. " : ""}
+                {d.stats.delivered + d.stats.failed > 0 ? "Grey: stops already done. Blue: the route still ahead. " : ""}
                 {r?.source !== "ors" ? "Lines connect stops in order; they are not roads. Travel times are estimated from distance." : ""}
               </p>
             </div>

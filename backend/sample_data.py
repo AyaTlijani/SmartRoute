@@ -55,8 +55,8 @@ DRIVER_PASSWORD = "driver123"
 # that no driver covers (they show up as "unassigned").
 CITY_WEIGHTS = (
     [(c, 6) for c, (g, *_ ) in CITIES.items() if g in ("Tunis", "Ariana", "Ben Arous", "Manouba")]
-    + [(c, 3) for c, (g, *_ ) in CITIES.items() if g in ("Sousse", "Monastir")]
-    + [("Sfax Centre", 4), ("Sakiet Ezzit", 2), ("Hammamet", 1), ("Nabeul Centre", 1),
+    + [(c, 8) for c, (g, *_ ) in CITIES.items() if g in ("Sousse", "Monastir")]
+    + [("Sfax Centre", 14), ("Sakiet Ezzit", 9), ("Hammamet", 1), ("Nabeul Centre", 1),
        ("Djerba Houmt Souk", 1), ("Bizerte Centre", 1)]
 )
 GOV_FAIL_BONUS = {"Manouba": 0.10, "Ben Arous": 0.05}
@@ -98,76 +98,18 @@ def _make_order(rng, phone=None):
     }
 
 
-def seed_demo(conn, days: int = 21) -> dict:
-    """Wipe everything, add drivers and `days` days of finished deliveries."""
-    for table in ("sessions", "users", "attempts", "routes", "orders", "drivers"):
-        conn.execute(f"DELETE FROM {table}")
-    conn.execute("DELETE FROM sqlite_sequence")
-
-    driver_ids = []
-    for name, phone, vehicle, zones, (dname, dlat, dlng) in DRIVERS:
-        cur = conn.execute(
-            "INSERT INTO drivers (name, phone, vehicle, zones, depot_name, depot_lat, depot_lng) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (name, phone, vehicle, zones, dname, dlat, dlng),
-        )
-        driver_ids.append((cur.lastrowid, zones.split(","), name))
-        conn.execute("INSERT INTO users (username, password_hash, role, driver_id, full_name) "
-                     "VALUES (?, ?, 'driver', ?, ?)",
-                     (name.split()[0].lower(), hash_password(DRIVER_PASSWORD), cur.lastrowid, name))
-    conn.execute("INSERT INTO users (username, password_hash, role, full_name) VALUES (?, ?, 'admin', ?)",
-                 (ADMIN_LOGIN[0], hash_password(ADMIN_LOGIN[1]), ADMIN_LOGIN[2]))
-
-    rng = random.Random(42)
-    risky = _risky_phones()
-    regulars = [_phone(rng) for _ in range(60)]
-    today = date.today()
-    count = 0
-    carry = []  # failed orders retried the next day: (original id, order dict)
-
-    for back in range(days, 0, -1):
-        day = today - timedelta(days=back)
-        n = rng.randint(28, 46) + (8 if day.weekday() == 0 else 0)  # busier Mondays
-        todays, carry = [(None, None)] * n + carry, []
-        for retry_of, o in todays:
-            if o is None:
-                pick = rng.random()
-                phone = rng.choice(risky) if pick < 0.08 else rng.choice(regulars) if pick < 0.35 else None
-                o = _make_order(rng, phone)
-            covering = [d for d in driver_ids if o["governorate"] in d[1]]
-            if not covering:
-                continue  # far-city orders were handled by a partner courier
-            driver_id, _, dname = rng.choice(covering)
-            p_fail = 0.10 + GOV_FAIL_BONUS.get(o["governorate"], 0)
-            p_fail += 0.06 if dname == "Youssef Gharbi" else 0
-            p_fail = 0.65 if o["phone"] in risky else p_fail
-            failed = rng.random() < p_fail
-            cur = conn.execute(
-                "INSERT INTO orders (delivery_date, customer_name, phone, governorate, city, "
-                "address, landmark, product, cod_amount, slot, notes, lat, lng, "
-                "location_precision, status, driver_id, retry_of) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'exact', ?, ?, ?)",
-                (day.isoformat(), o["customer_name"], o["phone"], o["governorate"], o["city"],
-                 o["address"], o["landmark"], o["product"], o["cod_amount_dt"],
-                 {"morning": 1, "afternoon": 2}.get(o["slot"], 0), o["notes"],
-                 o["lat"], o["lng"], "failed" if failed else "delivered", driver_id, retry_of),
-            )
-            if failed and retry_of is None and back > 1 and rng.random() < 0.4:
-                carry.append((cur.lastrowid, o))
-            cash = 0 if failed else o["cod_amount_dt"]
-            if not failed and rng.random() < 0.02:
-                cash = round(cash - rng.choice([5, 10, 20]), 1)  # occasional shortfall
-            hour = rng.randint(9, 17)
-            conn.execute(
-                "INSERT INTO attempts (order_id, driver_id, result, reason, cash_collected, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (cur.lastrowid, driver_id, "failed" if failed else "delivered",
-                 rng.choice(FAIL_REASONS) if failed else None, cash,
-                 f"{day.isoformat()} {hour:02d}:{rng.randint(0, 59):02d}:00"),
-            )
-            count += 1
-
-    return {"drivers": len(DRIVERS), "history_orders": count, "days": days}
+def seed_demo(conn, days: int = 21, live_today: bool = None) -> dict:
+    """
+    Wipe the database and load the demo company (see demo_seed.py).
+    live_today=False (or SMARTROUTE_SEED_TODAY=0) skips today's in-progress
+    day and tomorrow's orders; the tests use that to start from a clean day.
+    """
+    import os
+    import demo_seed
+    if live_today is None:
+        live_today = os.getenv("SMARTROUTE_SEED_TODAY", "1") != "0"
+    return demo_seed.seed(conn, DRIVERS, ADMIN_LOGIN, DRIVER_PASSWORD, _make_order, _risky_phones, _phone,
+                          days=days, live_today=live_today)
 
 
 def ensure_accounts(conn) -> None:

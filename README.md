@@ -6,7 +6,7 @@ There are two kinds of accounts:
 - **Admin** (web console): imports orders, plans routes, manages drivers and their logins, confirms the cash each driver hands over, sees analytics.
 - **Driver** (phone screen): sees only their own deliveries.
   1. Ticks off the packages while loading, then starts the route.
-  2. Calls, navigates, and marks each stop delivered (cash + optional photo) or failed (reason).
+  2. Follows the whole route on a map: finished stops and the path to them turn grey, the rest stays blue. Calls, navigates, and marks each stop delivered (cash + optional photo) or failed (reason).
   3. Re-plans the remaining stops from where they are when running late.
   4. Ends the day by declaring the cash handed over.
 
@@ -37,7 +37,19 @@ Open http://localhost:5173 and sign in.
 | Admin | `admin` | `admin123` |
 | Drivers | `ahmed`, `sami`, `youssef`, `mehdi`, `karim` | `driver123` |
 
-On first start, the backend creates `backend/smartroute.db` with 5 drivers, their logins and 3 weeks of delivery history. Restarting does not duplicate anything. To start over, stop the backend and delete `smartroute.db`. Databases from the earlier version are upgraded automatically, and their drivers get the logins above.
+All data lives in a SQLite database file, `backend/smartroute.db`; the pages only show what the API reads from it. On first start (about 10 seconds), the backend fills it with a fictional company:
+- **Past 3 weeks:** every driver's days with routes sequenced by OR-Tools, start and end times, delivered and failed stops with reasons, proof photos, retries, and confirmed cash handovers (a few short).
+- **Today, in progress:**
+  - Ahmed and Karim are on the road.
+  - Sami has just started.
+  - Youssef has finished and his cash is waiting for confirmation.
+  - Mehdi hasn't started.
+  - A few orders in regions nobody covers are unassigned.
+- **Tomorrow:** confirmed orders imported but not planned, so you can show **Plan routes** live.
+
+Restarting does not duplicate anything. To restore this state before a demo, use **Reset demo data** at the bottom of the admin sidebar. Opening the file with DB Browser for SQLite shows every table.
+
+**Demo clock.** By default (`SMARTROUTE_CLOCK=demo`), each driver's time follows their own progress, so the demo behaves like a working day at any hour. Set `SMARTROUTE_CLOCK=real` in `backend/.env` to use the wall clock. Databases from the earlier version are upgraded automatically, and their drivers get the logins above.
 
 To use a phone on the same Wi-Fi, open the "Network" address Vite prints (for example `http://192.168.1.20:5173`) and sign in as a driver.
 
@@ -82,21 +94,21 @@ The UI says which one is in use, and never shows straight lines as roads.
 
 | With customer time slots | Avg driving | Late stops (30 days) | Skipped |
 |---|---|---|---|
-| Excel order | 372 min | 226 | 0 |
-| Nearest stop first | 209 min | 141 | 0 |
-| OR-Tools | 209 min | 0 | 2 |
+| Excel order | 372 min | 206 | 0 |
+| Nearest stop first | 212 min | 166 | 0 |
+| OR-Tools | 207 min | 0 | 1 |
 
 | No time slots | Avg driving | vs nearest stop first |
 |---|---|---|
-| Nearest stop first | 209 min | |
-| OR-Tools | 194 min | −7.2% |
+| Nearest stop first | 212 min | |
+| OR-Tools | 194 min | −8.5% |
 
 | Whole fleet, 5 drivers, ~55 orders/day, 10 days | Total driving per day | Orders served |
 |---|---|---|
-| Zone rule + OR-Tools per driver | 579 min | 52.6 |
-| Fleet optimizer | 533 min (−7.9%) | 53.3 |
+| Zone rule + OR-Tools per driver | 643 min | 53.6 |
+| Fleet optimizer | 597 min (−7.2%) | 53.8 |
 
-With time slots, OR-Tools drives about as much as the greedy route but reaches every customer on time. Without time slots, it saves about 7% driving. Letting the optimizer also choose the drivers saves about 8% more across the fleet. These numbers use estimated travel times on generated data. They show the method works; they are not real-world savings.
+With time slots, OR-Tools drives slightly less than the greedy route (−2.5%) and, above all, reaches every customer on time; the greedy route was late 166 times. Without time slots, it saves about 8.5% driving. Letting the optimizer also choose the drivers saves about 7% more across the fleet. These numbers use estimated travel times on generated data. They show the method works; they are not real-world savings.
 
 ## Tests
 
@@ -107,7 +119,7 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-There are 21 end-to-end API tests:
+There are 22 end-to-end API tests:
 - roles and login
 - import validation, revalidation and persistence
 - zone, capacity and inactive-driver rules
@@ -123,6 +135,7 @@ There are 21 end-to-end API tests:
 - re-planning from the current time and position
 - started drivers keep their stops
 - the fleet optimizer respects zones and capacity, and drives no more than the zone rule
+- the lived-in demo: driver states, a cash handover waiting, tomorrow's orders, closed past days, and route legs kept for finished stops
 
 ## Project layout
 
@@ -141,7 +154,9 @@ backend/
   distance.py        OpenRouteService client + offline estimate
   orders_import.py   Excel reading and row checks
   tunisia.py         governorates, cities, spelling variants
-  sample_data.py     demo drivers, accounts, history, Excel files
+  sample_data.py     order generator, demo drivers, Excel template and sample files
+  demo_seed.py       the lived-in demo company (history, today in progress, tomorrow)
+  clock.py           wall clock or demo clock
   db.py              SQLite schema and migrations
   tests/             pytest suite
 frontend/src/

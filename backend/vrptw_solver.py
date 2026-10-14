@@ -56,6 +56,7 @@ def solve(
     drop_penalty: Optional[int] = None,
     time_limit: int = 2,
     day_end: int = DAY_END,
+    improve: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """
     Returns {"routes": [[{"node", "arrival"}...] per vehicle], "dropped": [nodes],
@@ -104,8 +105,11 @@ def solve(
 
     params = pywrapcp.DefaultRoutingSearchParameters()
     params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
-    params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    params.time_limit.seconds = int(time_limit)
+    if improve:
+        params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        params.time_limit.seconds = int(time_limit)
+    # improve=False: construction + plain descent only (milliseconds). Used to
+    # generate weeks of demo history quickly, never for live planning.
 
     solution = routing.SolveWithParameters(params)
     if solution is None:

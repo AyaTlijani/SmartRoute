@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
+import clock
 import planning
 import sample_data
 from auth import CurrentUser, current_user, require_admin, require_driver
@@ -172,6 +173,7 @@ _ORDER_FIELDS = f"""
 def _decorate(order):
     order["slot_label"] = SLOT_LABELS.get(order["slot"] or 0)
     order["has_photo"] = bool(order["has_photo"])
+    order["leg"] = json.loads(order.pop("leg_geometry")) if order.get("leg_geometry") else None
     return order
 
 
@@ -190,7 +192,9 @@ def driver_payload(conn, drv, d):
         **{k: drv[k] for k in ("id", "name", "phone", "vehicle", "zones", "depot_name",
                                "depot_lat", "depot_lng", "max_orders", "active")},
         "orders": orders,
-        "route": dict(route, geometry=json.loads(route["geometry"])) if route else None,
+        "route": (dict(route, geometry=json.loads(route["geometry"]),
+                       return_leg=json.loads(route["return_leg"]) if route["return_leg"] else None)
+                  if route else None),
         "day_state": day_state(conn, drv["id"], d),
         "stats": {
             "total": len(orders),
@@ -403,7 +407,7 @@ async def deliver(
                 f.write(data)
         conn.execute("INSERT INTO attempts (order_id, driver_id, result, cash_collected, photo_path, lat, lng, created_at) "
                      "VALUES (?, ?, 'delivered', ?, ?, ?, ?, ?)",
-                     (order_id, o["driver_id"], cash_collected, name, lat, lng, _now()))
+                     (order_id, o["driver_id"], cash_collected, name, lat, lng, clock.attempt_time(conn, o)))
         conn.execute("UPDATE orders SET status = 'delivered' WHERE id = ?", (order_id,))
     return {"ok": True}
 
@@ -424,7 +428,7 @@ def fail(order_id: int, req: FailRequest, user: CurrentUser = Depends(current_us
         _check_can_act(conn, o, user)
         conn.execute("INSERT INTO attempts (order_id, driver_id, result, reason, note, lat, lng, created_at) "
                      "VALUES (?, ?, 'failed', ?, ?, ?, ?, ?)",
-                     (order_id, o["driver_id"], req.reason, req.note, req.lat, req.lng, _now()))
+                     (order_id, o["driver_id"], req.reason, req.note, req.lat, req.lng, clock.attempt_time(conn, o)))
         conn.execute("UPDATE orders SET status = 'failed' WHERE id = ?", (order_id,))
     return {"ok": True}
 

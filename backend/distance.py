@@ -73,10 +73,13 @@ def time_matrix_for_coordinates(coordinates: List[List[float]]) -> Tuple[List[Li
     return _estimated_matrix(coordinates), "estimate"
 
 
-def road_route_for_coordinates(coordinates: List[List[float]]) -> Tuple[List[List[float]], float, int, str]:
+def road_route_for_coordinates(coordinates: List[List[float]]):
     """
     Route through the points in the given order.
-    Returns (geometry, distance_m, duration_s, "ors" | "estimate").
+
+    Returns (geometry, distance_m, duration_s, source, legs) where legs[i] is
+    the path from point i to point i+1, so each delivery can be drawn (and
+    greyed out once done) on its own.
     """
     if USE_ORS:
         try:
@@ -85,12 +88,17 @@ def road_route_for_coordinates(coordinates: List[List[float]]) -> Tuple[List[Lis
             r.raise_for_status()
             feature = r.json()["features"][0]
             summary = feature["properties"]["summary"]
-            return (feature["geometry"]["coordinates"], float(summary["distance"]),
-                    int(round(summary["duration"])), "ors")
+            geometry = feature["geometry"]["coordinates"]
+            marks = feature["properties"].get("way_points") or []
+            legs = ([geometry[a:b + 1] for a, b in zip(marks, marks[1:])]
+                    if len(marks) == len(coordinates) else
+                    [[list(a), list(b)] for a, b in zip(coordinates, coordinates[1:])])
+            return geometry, float(summary["distance"]), int(round(summary["duration"])), "ors", legs
         except Exception as exc:
             log.warning("ORS directions failed, using estimate: %s", exc)
 
     legs = list(zip(coordinates, coordinates[1:]))
     km = sum(_haversine_km(a, b) * _ROAD_FACTOR for a, b in legs)
     minutes = sum(_estimate_minutes(_haversine_km(a, b) * _ROAD_FACTOR) for a, b in legs)
-    return [list(c) for c in coordinates], km * 1000, minutes * 60, "estimate"
+    return ([list(c) for c in coordinates], km * 1000, minutes * 60, "estimate",
+            [[list(a), list(b)] for a, b in legs])

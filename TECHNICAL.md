@@ -93,6 +93,7 @@ orders
 - driver_id, stop_number, eta
 - unscheduled_reason: why the solver could not fit this stop
 - retry_of: the failed order this one retries. A unique index allows one retry per order.
+- leg_geometry: the path from the previous stop (or the depot) to this one. It is kept once the stop is finished, so the day's whole route stays drawable after re-planning.
 
 attempts (one row per delivered/failed action)
 - id, order_id, driver_id, result, reason, note, cash_collected
@@ -108,6 +109,7 @@ routes (one row per driver per day)
 - source: "ors" or "estimate"
 - end_time: when the driver is back at the depot
 - baseline_minutes, baseline_late: the nearest-neighbour route on the same matrix
+- return_leg: the path from the last stop back to the depot
 
 driver_days (one row per driver per working day)
 - driver_id, day
@@ -320,9 +322,13 @@ Address `/driver`; only reachable with a driver session. Always shows today.
 **On the road:**
 
 - **Header:** name, day, stops done, cash collected vs to collect, progress bar, planned return time.
-- **Tabs:**
+- **Map, always on top:** the whole day's route, depot → every stop → depot, one leg per stop.
+  - A finished stop's marker and the leg leading to it turn grey (a failed stop keeps a red ring).
+  - The legs still ahead stay blue; the next stop's marker is larger.
+  - Re-planning redraws only the part ahead.
+  - The same map, with the same colours, is shown to the admin in Dispatch.
+- **Tabs under the map:**
   - To do: the stops in route order. The next stop is open and highlighted.
-  - Map: stops colored green, red or blue.
   - Done: each finished stop, with an Undo button.
 - **An open stop shows:**
   - customer history and approximate-location badges, and the time slot
@@ -360,19 +366,39 @@ Charts and tables:
 - phones with 2 or more failed attempts
 
 
-## 13. Demo data
+## 13. Demo data and clock
 
-`sample_data.seed_demo` runs on first start when there are no drivers.
+All data is stored in the SQLite database (section 4). `sample_data.seed_demo` (implemented in `demo_seed.py`) fills it on first start, or when the admin clicks **Reset demo data** (`POST /admin/demo/reset`). It takes about 10 seconds.
 
 - **5 drivers:**
   - three at the Charguia hub covering Grand Tunis governorates
   - Sousse/Monastir/Mahdia, from a Sousse relay point
   - Sfax, from a Sfax relay point
 - **Accounts:** one admin and one login per driver.
-- **History:** 21 past days, 28–46 orders per day (more on Mondays).
+- **Past 21 days:** 28–46 orders per day (more on Mondays), spread over the drivers who cover each governorate.
+  - Each driver's day is sequenced by OR-Tools (construction only, for speed) on estimated travel times, with stop numbers, ETAs, legs and a routes row.
+  - Attempts are stamped around each ETA, and a driver_days row records start (8:45–9:00), end and a cash handover confirmed by the admin. In about 12% of days, a little less cash is declared.
+  - A stop that didn't fit the day is recorded as failed, "Not reached before 6 PM".
+  - About 35% of deliveries have a proof photo: three small generated PNGs in backend/uploads.
   - About 40% of failed orders are retried the next day as linked orders.
   - Built-in patterns: base failure 10%, +10% in Manouba, +5% in Ben Arous, +6% for one driver, 65% for 12 "risky" phone numbers, and about 2% of deliveries short by 5–20 DT.
+- **Today:** about 58 new orders plus yesterday's retries, with two orders at governorate-level location only. They are planned with the zone rule, then progress is simulated:
+
+      Ahmed    on the road, ~60% done (one failure, one delivery 10 DT short)
+      Sami     on the road, ~25% done
+      Youssef  finished, declared 15 DT less than recorded, waiting for the admin
+      Mehdi    planned, not started
+      Karim    on the road, ~50% done
+
+  Orders for governorates nobody covers stay unassigned.
+- **Tomorrow:** 46 confirmed orders imported as pending, ready for **Plan routes**.
 - **Names:** generated. A phone number always has the same name.
+
+The tests seed without today and tomorrow (`SMARTROUTE_SEED_TODAY=0`), so every test starts from a clean day.
+
+**Clock** (`clock.py`): times inside the planner are minutes after 9:00.
+- **`SMARTROUTE_CLOCK=real`:** the wall clock.
+- **Default `demo`:** a driver's "now" is the time of their last recorded stop, or of their start. New deliveries are stamped at their planned arrival, never before the previous stop. Start and end of day are stamped plausibly. This keeps the demo coherent at any hour; with the real clock, re-planning in the evening would correctly mark every remaining stop as too late.
 
 
 ## 14. API reference
@@ -398,7 +424,7 @@ Interactive docs: http://localhost:8000/docs
 
 ## 15. Tests
 
-`python -m pytest -q` in backend/ runs 21 end-to-end API tests. They use a temporary database and no API key, and cover:
+`python -m pytest -q` in backend/ runs 22 end-to-end API tests. They use a temporary database and no API key, and cover:
 - startup: no duplication on restart; accounts added to old databases
 - auth and roles
 - import errors, revalidation and persistence
@@ -417,6 +443,7 @@ Interactive docs: http://localhost:8000/docs
 - re-planning from the current time and position
 - started drivers keep their stops when the admin re-plans
 - the fleet optimizer respects zones and capacity, and drives no more than the zone rule
+- the lived-in demo: driver states, a cash handover waiting, tomorrow's orders, closed past days, and legs kept for finished stops
 - clearing a day keeps finished orders
 
 

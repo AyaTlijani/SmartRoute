@@ -112,7 +112,7 @@ def overview(day: str = None, _: CurrentUser = Depends(require_admin)):
             SELECT a.created_at, a.result, a.reason, a.cash_collected, o.customer_name, o.id AS order_id,
                    d.name AS driver
             FROM attempts a JOIN orders o ON o.id = a.order_id LEFT JOIN drivers d ON d.id = a.driver_id
-            WHERE o.delivery_date = ? AND a.voided_at IS NULL ORDER BY a.id DESC LIMIT 8""", (d,))
+            WHERE o.delivery_date = ? AND a.voided_at IS NULL ORDER BY a.created_at DESC, a.id DESC LIMIT 8""", (d,))
 
     by = lambda s: [o for o in orders if o["status"] == s]
     pending, assigned, delivered, failed = by("pending"), by("assigned"), by("delivered"), by("failed")

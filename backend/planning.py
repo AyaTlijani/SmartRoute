@@ -25,6 +25,7 @@ import math
 from datetime import date, datetime
 from typing import Dict, List, Optional
 
+import clock as clock_mod
 from db import rows
 from distance import road_route_for_coordinates, time_matrix_for_coordinates
 from route_eval import nearest_neighbour, simulate
@@ -36,10 +37,9 @@ SERVICE_MINUTES = 10
 DROP_PENALTY = 100_000
 
 
-def now_minutes() -> int:
-    """Minutes since 9:00 AM today (negative before 9). Patched in tests."""
-    n = datetime.now()
-    return n.hour * 60 + n.minute - 9 * 60
+def now_minutes(conn, driver_id, d) -> int:
+    """Minutes after 9:00 for this driver (wall clock or demo clock, see clock.py). Patched in tests."""
+    return clock_mod.driver_now(conn, driver_id, d)
 
 
 def zones_of(driver) -> List[str]:
@@ -82,7 +82,7 @@ def _start_point(conn, drv, d):
     depot = [drv["depot_lng"], drv["depot_lat"]]
     if d != date.today().isoformat() or not started(conn, drv["id"], d):
         return depot, 0, "depot"
-    t = max(0, now_minutes())
+    t = max(0, now_minutes(conn, drv["id"], d))
     day = conn.execute("SELECT last_lat, last_lng FROM driver_days WHERE driver_id = ? AND day = ?",
                        (drv["id"], d)).fetchone()
     if day and day["last_lat"] is not None:
@@ -117,7 +117,7 @@ def route_driver(conn, drv: dict, d: str) -> None:
     """
     stops = rows(conn, "SELECT id, lat, lng, slot FROM orders WHERE delivery_date = ? AND driver_id = ? "
                        "AND status = 'assigned' ORDER BY id", (d, drv["id"]))
-    conn.execute("UPDATE orders SET stop_number = NULL, eta = NULL, unscheduled_reason = NULL "
+    conn.execute("UPDATE orders SET stop_number = NULL, eta = NULL, unscheduled_reason = NULL, leg_geometry = NULL "
                  "WHERE delivery_date = ? AND driver_id = ? AND status = 'assigned'", (d, drv["id"]))
     conn.execute("DELETE FROM routes WHERE driver_id = ? AND delivery_date = ?", (drv["id"], d))
     if not stops:
@@ -158,13 +158,18 @@ def route_driver(conn, drv: dict, d: str) -> None:
     baseline = simulate(nearest_neighbour(matrix, range(1, len(stops) + 1), start=start), matrix, windows,
                         SERVICE_MINUTES, start=start, start_time=t0)
     path = [coords[start]] + [coords[j] for j in order] + [depot_xy]
-    geometry, meters, _, route_source = road_route_for_coordinates(path)
+    geometry, meters, _, route_source, legs = road_route_for_coordinates(path)
+    # Each stop keeps the path that leads to it, so finished deliveries stay
+    # drawn (in grey) even after the rest of the route is re-planned.
+    for k, s in enumerate(visited):
+        conn.execute("UPDATE orders SET leg_geometry = ? WHERE id = ?",
+                     (json.dumps(legs[k]), stops[s["node"] - 1]["id"]))
     conn.execute(
         "INSERT INTO routes (driver_id, delivery_date, geometry, distance_km, driving_minutes, source, "
-        "end_time, baseline_minutes, baseline_late) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "end_time, baseline_minutes, baseline_late, return_leg) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (drv["id"], d, json.dumps(geometry), round(meters / 1000, 1), optimized["travel_minutes"],
          "ors" if source == route_source == "ors" else "estimate", clock(optimized["end_minutes"]),
-         baseline["travel_minutes"], baseline["late_stops"]))
+         baseline["travel_minutes"], baseline["late_stops"], json.dumps(legs[-1])))
 
 
 def route_all(conn, d: str, driver_ids=None) -> None:
