@@ -108,7 +108,7 @@ export default function DriverApp() {
       <main className="mx-auto max-w-lg px-4 pb-28 pt-4">
         <ErrorBanner error={error} onClose={() => setError(null)} />
         {!data ? <Loading label="Loading your deliveries" /> : data.orders.length === 0 && !closed ? (
-          <div className="rounded-lg border border-slate-200 bg-white p-6 text-center">
+          <div className="rounded-2xl bg-white shadow-card p-6 text-center">
             <Package className="mx-auto h-8 w-8 text-ink-300" />
             <p className="mt-3 font-semibold">No deliveries assigned today</p>
             <p className="mt-1 text-sm text-ink-500">When dispatch plans your route it appears here. This page refreshes on its own.</p>
@@ -125,10 +125,10 @@ export default function DriverApp() {
           <>
             {closed && <DayClosed data={data} />}
             <DayMap data={data} next={next} />
-            <div className="my-4 grid grid-cols-2 rounded-lg bg-slate-200 p-1 text-sm font-medium" role="tablist">
+            <div className="my-4 grid grid-cols-2 rounded-xl bg-mint p-1 text-sm font-medium" role="tablist">
               {[["route", `To do (${todo.length})`], ["done", `Done (${done.length})`]].map(([k, l]) => (
                 <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-                  className={cx("rounded-md py-2", tab === k ? "bg-white shadow-sm" : "text-ink-700")}>{l}</button>
+                  className={cx("rounded-lg py-2", tab === k ? "bg-white shadow-sm" : "text-ink-700")}>{l}</button>
               ))}
             </div>
 
@@ -156,7 +156,7 @@ export default function DriverApp() {
               <ul className="space-y-2">
                 {done.length === 0 && <p className="py-6 text-center text-sm text-ink-500">Nothing finished yet.</p>}
                 {done.map((o) => (
-                  <li key={o.id} className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3">
+                  <li key={o.id} className="flex items-center gap-3 rounded-2xl bg-white shadow-card px-4 py-3">
                     <span className="w-6 text-center font-semibold tabular text-ink-500">{o.stop_number ?? "–"}</span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">{o.customer_name}</p>
@@ -206,7 +206,7 @@ function DayMap({ data, next, compact }) {
   if (!stops.length) return null;
   const left = data.orders.filter((o) => o.status === "assigned" && o.stop_number).length;
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <div className="overflow-hidden rounded-2xl bg-white shadow-card">
       <RouteMap bare height={compact ? "h-[30vh]" : "h-[42vh]"}
         depot={{ coordinates: [data.depot_lng, data.depot_lat], address: data.depot_name }}
         stops={stops.map(toMapStop)} legs={routeLegs(data.orders, data.route)}
@@ -228,7 +228,7 @@ function LoadingChecklist({ data, busy, onStart }) {
   const [loaded, setLoaded] = useState({});
   const count = stops.filter((o) => loaded[o.id]).length;
   return (
-    <div className="rounded-lg border border-slate-200 bg-white">
+    <div className="rounded-2xl bg-white shadow-card">
       <div className="border-b border-slate-200 px-4 py-3.5">
         <p className="font-semibold">Load your packages</p>
         <p className="text-[13px] text-ink-500">

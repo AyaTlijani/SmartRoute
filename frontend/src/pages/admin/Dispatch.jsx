@@ -116,8 +116,8 @@ export default function Dispatch() {
             <nav aria-label="Drivers" className="space-y-1.5">
               {data.unassigned.length > 0 && (
                 <button type="button" onClick={() => select("unassigned")}
-                  className={cx("flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left",
-                    selected === "unassigned" ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white hover:border-slate-300")}>
+                  className={cx("flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left",
+                    selected === "unassigned" ? "border-amber-400 bg-amber-50" : "border-transparent bg-white shadow-card hover:border-mint-200")}>
                   <span className="flex items-center gap-2 text-sm font-medium"><AlertTriangle className="h-4 w-4 text-amber-700" />Unassigned</span>
                   <span className="text-sm tabular">{data.unassigned.length}</span>
                 </button>
@@ -178,7 +178,7 @@ function DriverRow({ d, active, onClick }) {
   const done = d.stats.delivered + d.stats.failed;
   return (
     <button type="button" onClick={onClick}
-      className={cx("w-full rounded-lg border px-4 py-3 text-left", active ? "border-brand bg-brand-50" : "border-slate-200 bg-white hover:border-slate-300")}>
+      className={cx("w-full rounded-2xl border px-4 py-3 text-left", active ? "border-brand bg-brand-50" : "border-transparent bg-white shadow-card hover:border-mint-200")}>
       <div className="flex items-baseline justify-between gap-2">
         <span className="truncate text-sm font-medium">{d.name}</span>
         <span className={cx("text-[13px] tabular", d.stats.total >= d.max_orders ? "text-amber-800" : "text-ink-500")}>{d.stats.total}/{d.max_orders}</span>
@@ -265,7 +265,7 @@ function DriverRoute({ d, drivers, busy, editable, onReassign, onOpen, onReceive
                 stops={routed.map(toMapStop)} legs={routeLegs(d.orders, r)} straightLines={r?.source !== "ors"}
                 nextStop={d.orders.find((o) => o.status === "assigned" && o.stop_number)?.stop_number} />
               <p className="px-5 py-2 text-xs text-ink-500">
-                {d.stats.delivered + d.stats.failed > 0 ? "Grey: stops already done. Blue: the route still ahead. " : ""}
+                {d.stats.delivered + d.stats.failed > 0 ? "Grey: stops already done. Green: the route still ahead. " : ""}
                 {r?.source !== "ors" ? "Lines connect stops in order; they are not roads. Travel times are estimated from distance." : ""}
               </p>
             </div>

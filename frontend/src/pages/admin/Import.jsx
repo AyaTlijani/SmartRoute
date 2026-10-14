@@ -154,7 +154,7 @@ export default function Import() {
           <div className="flex gap-1 border-b border-slate-200 px-5 py-2.5">
             {[["problems", `Needs a look (${validation.summary.error + validation.summary.warning})`], ["all", `All rows (${validation.summary.total})`]].map(([k, l]) => (
               <button key={k} type="button" onClick={() => setFilter(k)}
-                className={cx("rounded-md px-3 py-1.5 text-[13px]", filter === k ? "bg-ink text-white" : "text-ink-700 hover:bg-slate-100")}>{l}</button>
+                className={cx("rounded-lg px-3 py-1.5 text-[13px] font-semibold", filter === k ? "bg-brand text-white" : "text-ink-700 hover:bg-slate-100")}>{l}</button>
             ))}
           </div>
           <div className="overflow-x-auto">

@@ -103,14 +103,14 @@ function RouteArt() {
   return (
     <svg className="absolute inset-0 h-full w-full" viewBox="0 0 760 760" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
       {Array.from({ length: 19 }, (_, i) => (
-        <line key={i} x1={i * 40} y1="0" x2={i * 40} y2="760" stroke="#1A2B42" strokeWidth="1" />
+        <line key={i} x1={i * 40} y1="0" x2={i * 40} y2="760" stroke="#1B3A2B" strokeWidth="1" />
       ))}
       {Array.from({ length: 19 }, (_, i) => (
-        <line key={`h${i}`} x1="0" y1={i * 40} x2="760" y2={i * 40} stroke="#1A2B42" strokeWidth="1" />
+        <line key={`h${i}`} x1="0" y1={i * 40} x2="760" y2={i * 40} stroke="#1B3A2B" strokeWidth="1" />
       ))}
-      <path d={d} stroke="#0B65A6" strokeWidth="3" fill="none" strokeLinejoin="round" opacity="0.55" />
+      <path d={d} stroke="#3FBF86" strokeWidth="3" fill="none" strokeLinejoin="round" opacity="0.55" />
       {stops.map(([x, y], i) => (
-        <circle key={i} opacity="0.7" cx={x} cy={y} r={i === 0 ? 9 : 6} fill={i === 0 ? "#fff" : "#0F1C2E"} stroke={i === 0 ? "#0B65A6" : "#5DA9DE"} strokeWidth="3" />
+        <circle key={i} opacity="0.7" cx={x} cy={y} r={i === 0 ? 9 : 6} fill={i === 0 ? "#fff" : "#12291E"} stroke={i === 0 ? "#3FBF86" : "#7FD6AE"} strokeWidth="3" />
       ))}
     </svg>
   );

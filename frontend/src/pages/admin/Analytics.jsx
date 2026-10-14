@@ -23,7 +23,7 @@ export default function Analytics() {
           <div className="flex rounded-md border border-slate-300 bg-white" role="tablist" aria-label="Period">
             {PERIODS.map((p) => (
               <button key={p} type="button" role="tab" aria-selected={days === p} onClick={() => setDays(p)}
-                className={cx("h-9 px-4 text-sm first:rounded-l-md last:rounded-r-md", days === p ? "bg-ink text-white" : "hover:bg-slate-50")}>
+                className={cx("h-9 px-4 text-sm first:rounded-l-md last:rounded-r-md", days === p ? "bg-brand text-white" : "hover:bg-slate-50")}>
                 {p} days
               </button>
             ))}
@@ -117,7 +117,7 @@ function Dashboard({ data }) {
         </Panel>
       </div>
 
-      <details className="rounded-lg border border-slate-200 bg-white px-5 py-3 text-sm">
+      <details className="rounded-2xl bg-white shadow-card px-5 py-3 text-sm">
         <summary className="cursor-pointer font-medium">How these numbers are calculated</summary>
         <dl className="mt-3 grid gap-3 text-ink-700 sm:grid-cols-2">
           <div><dt className="font-medium">Attempt success</dt><dd>Delivered attempts divided by all attempts. Undone attempts are excluded.</dd></div>

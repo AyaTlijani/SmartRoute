@@ -54,7 +54,7 @@ export default function Orders() {
               {FILTERS.map(([k, label]) => (
                 <button key={k} type="button" role="tab" aria-selected={status === k}
                   onClick={() => setParams(k === "all" ? {} : { status: k })}
-                  className={cx("rounded-md px-3 py-1.5 text-[13px]", status === k ? "bg-ink text-white" : "text-ink-700 hover:bg-slate-100")}>
+                  className={cx("rounded-lg px-3 py-1.5 text-[13px] font-semibold", status === k ? "bg-brand text-white" : "text-ink-700 hover:bg-slate-100")}>
                   {label} <span className="tabular opacity-70">{count(k)}</span>
                 </button>
               ))}

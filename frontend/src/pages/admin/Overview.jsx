@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, ChevronRight, Info, OctagonAlert, Truck } from "lucide-react";
 import { api, dt, errorText, formatDay } from "../../api";
+import { useAuth } from "../../auth";
 import { DayPicker, useDay } from "../../layouts/AdminLayout";
 import { Button, DayStateBadge, EmptyState, ErrorBanner, Loading, Metric, MetricStrip, PageHeader, Panel, cx } from "../../components/ui";
 
@@ -13,6 +14,7 @@ const LEVEL = {
 
 export default function Overview() {
   const { day } = useDay();
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
@@ -26,7 +28,8 @@ export default function Overview() {
 
   return (
     <>
-      <PageHeader title="Overview" description={`Deliveries for ${formatDay(day)}, and what needs your attention.`}
+      <PageHeader title={`Welcome back, ${(user?.full_name || "").split(" ")[0]}`}
+        description={`Here is ${formatDay(day)}: deliveries, drivers and what needs your attention.`}
         actions={<DayPicker />} />
       <ErrorBanner error={error} />
       {!data ? <Loading /> : <Body data={data} />}

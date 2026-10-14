@@ -23,10 +23,10 @@ function createDeliveryIcon(number, status, isNext) {
         width: ${size}px;
         height: ${size}px;
         border-radius: 50%;
-        background: ${done ? DONE_GREY : "#0B65A6"};
+        background: ${done ? DONE_GREY : "#16855A"};
         color: #ffffff;
         border: 3px solid ${status === "failed" ? "#DC2626" : "#ffffff"};
-        ${isNext ? "outline: 3px solid rgba(11,101,166,0.35);" : ""}
+        ${isNext ? "outline: 3px solid rgba(22,133,90,0.35);" : ""}
         box-shadow: 0 3px 10px rgba(15, 23, 42, 0.30);
         display: flex;
         align-items: center;
@@ -50,7 +50,7 @@ const depotIcon = L.divIcon({
       width: 42px;
       height: 42px;
       border-radius: 50%;
-      background: #0F1C2E;
+      background: #12291E;
       color: #ffffff;
       border: 3px solid #ffffff;
       box-shadow: 0 3px 10px rgba(15, 23, 42, 0.32);
@@ -245,7 +245,7 @@ export default function RouteMap({
   ];
 
   return (
-    <div className={bare ? "overflow-hidden" : "overflow-hidden rounded-lg border border-slate-200 bg-white"}>
+    <div className={bare ? "overflow-hidden" : "overflow-hidden rounded-2xl bg-white shadow-card"}>
       <div className={bare ? "hidden" : "flex flex-col gap-3 border-b border-slate-100 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between"}>
         <div>
           <h3 className="text-sm font-bold text-slate-900">
@@ -315,7 +315,7 @@ export default function RouteMap({
                   <Polyline positions={l.points}
                     pathOptions={{ color: "#ffffff", weight: 9, opacity: 0.9, lineCap: "round", lineJoin: "round" }} />
                   <Polyline positions={l.points}
-                    pathOptions={{ color: "#0B65A6", weight: 5, opacity: 0.95, lineCap: "round", lineJoin: "round" }} />
+                    pathOptions={{ color: "#16855A", weight: 5, opacity: 0.95, lineCap: "round", lineJoin: "round" }} />
                 </React.Fragment>
               ))}
             </>
@@ -337,7 +337,7 @@ export default function RouteMap({
               <Polyline
                 positions={roadRoutePoints}
                 pathOptions={{
-                  color: "#0B65A6",
+                  color: "#16855A",
                   weight: 5,
                   opacity: 0.95,
                   lineCap: "round",
